@@ -21,6 +21,8 @@ async function main() {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
   page.setDefaultTimeout(10000);
+  page.on('console', msg => console.log('PAGE_LOG:', msg.text()));
+  page.on('pageerror', err => console.log('PAGE_ERR:', err.message));
 
   let passed = 0;
   let failed = 0;
@@ -108,7 +110,7 @@ async function main() {
     // 5. Click remove button on first card (Bleach)
     await step('Click remove button on first card (Bleach)', async () => {
       const firstRemoveBtn = (await page.$$('#continue-grid .btn-remove-continue'))[0];
-      await firstRemoveBtn.click();
+      await firstRemoveBtn.click({ force: true });
 
       // Wait for toast notification
       await page.waitForSelector('#toast-container > div', { timeout: 5000 });

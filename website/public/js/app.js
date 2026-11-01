@@ -342,7 +342,6 @@ document.addEventListener('DOMContentLoaded', () => {
   initAuth().then(() => {
     initRouting();
     loadHomeFeed();
-    loadContinueWatching();
   });
 
   // ============================================================================
@@ -1282,7 +1281,9 @@ document.addEventListener('DOMContentLoaded', () => {
   window.recordWatchProgress = recordWatchProgress;
 
   // Continue Watching Rail Loading
+  let continueWatchingRequestId = 0;
   async function loadContinueWatching() {
+    const currentReqId = ++continueWatchingRequestId;
     let history = [];
 
     if (state.auth.token) {
@@ -1291,11 +1292,13 @@ document.addEventListener('DOMContentLoaded', () => {
           headers: { 'Authorization': `Bearer ${state.auth.token}` }
         });
         const json = await res.json();
+        if (currentReqId !== continueWatchingRequestId) return;
         if (json.success && Array.isArray(json.data)) {
           history = json.data;
           state.userHistory = history;
         }
       } catch (err) {
+        if (currentReqId !== continueWatchingRequestId) return;
         console.warn('[History] Fetch failed:', err);
       }
     } else {
@@ -1329,6 +1332,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       }
     }
+
+    if (currentReqId !== continueWatchingRequestId) return;
 
     // Deduplicate by anime_id (keep most recent) and filter invalid
     const seen = new Set();
@@ -1373,7 +1378,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <div class="absolute inset-0 bg-gradient-to-t from-surface-container-lowest via-transparent to-transparent"></div>
             
             <!-- Quick Remove Button -->
-            <button class="btn-remove-continue absolute top-2 right-2 z-20 w-7 h-7 rounded-full bg-black/75 hover:bg-red-600 text-gray-300 hover:text-white backdrop-blur-md border border-white/20 flex items-center justify-center opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition-all duration-200 shadow-lg hover:scale-110 active:scale-90 cursor-pointer" title="Remove from Continue Watching" onclick="window.removeHistoryItem('${cleanAnimeId}', event);">
+            <button class="btn-remove-continue absolute top-2 right-2 z-20 w-7 h-7 rounded-full bg-black/80 hover:bg-red-600 text-gray-200 hover:text-white backdrop-blur-md border border-white/20 flex items-center justify-center opacity-80 hover:opacity-100 transition-all duration-200 shadow-lg hover:scale-110 active:scale-90 cursor-pointer" title="Remove from Continue Watching" onclick="window.removeHistoryItem('${cleanAnimeId}', event);">
               <span class="material-symbols-outlined text-[15px] pointer-events-none">close</span>
             </button>
 
@@ -2110,10 +2115,11 @@ document.addEventListener('DOMContentLoaded', () => {
       `;
     }).join('');
 
-    // Scroll active into view
+    // Scroll active episode tile into view inside episodes container only (never scroll the outer window)
     const activeTile = episodesScrollList.querySelector(`.ep-tile[data-idx="${activeIndex}"]`);
-    if (activeTile && typeof activeTile.scrollIntoView === 'function') {
-      activeTile.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    if (activeTile && episodesScrollList) {
+      const offsetTop = activeTile.offsetTop - episodesScrollList.offsetTop;
+      episodesScrollList.scrollTop = Math.max(0, offsetTop - 40);
     }
   }
 
@@ -2598,6 +2604,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   window.removeHistoryItem = async function(animeId, e) {
+    continueWatchingRequestId++;
     if (e) {
       try {
         e.preventDefault();
@@ -2675,6 +2682,7 @@ document.addEventListener('DOMContentLoaded', () => {
       e.preventDefault();
       if (!confirm('Clear all items from Continue Watching?')) return;
 
+      continueWatchingRequestId++;
       continueSection.classList.add('hidden');
       continueGrid.innerHTML = '';
 
