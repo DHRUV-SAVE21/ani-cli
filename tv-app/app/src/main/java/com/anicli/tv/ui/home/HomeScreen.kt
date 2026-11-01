@@ -64,7 +64,7 @@ fun HomeScreen(
         if (focusedItem == null) {
             focusedItem = target
         } else {
-            delay(180) // Debounce rapid D-pad browsing so HeroBanner image decoding doesn't lag the UI
+            delay(280) // Debounce rapid D-pad browsing so HeroBanner image decoding doesn't lag the UI
             focusedItem = target
         }
     }
@@ -782,7 +782,7 @@ fun HeroBanner(
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
                 .data(item.backdropUrl?.takeIf { it.isNotBlank() } ?: item.posterUrl)
-                .size(960, 540)
+                .size(640, 360)
                 .precision(coil.size.Precision.INEXACT)
                 .crossfade(false)
                 .allowRgb565(true)

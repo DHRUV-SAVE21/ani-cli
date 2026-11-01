@@ -1,6 +1,9 @@
 package com.anicli.tv.player
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.media.AudioManager
 import android.net.Uri
 import android.view.ViewGroup
@@ -33,9 +36,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
@@ -104,26 +110,45 @@ fun VideoPlayer(
     var selectedQuality by remember { mutableStateOf("Auto") }
     var showQualityDialog by remember { mutableStateOf(false) }
     var captionsEnabled by remember { mutableStateOf(true) }
-    var isMuted by remember { mutableStateOf(false) }
 
     val currentOnNextEpisode by rememberUpdatedState(onNextEpisode)
     var hasHandledEnded by remember(videoUrl) { mutableStateOf(false) }
 
-    // Ensure device audio stream is unmuted and at healthy volume on startup
-    LaunchedEffect(Unit) {
-        try {
-            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+    val audioManager = remember { context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager }
+    var systemVolumePercent by remember {
+        mutableIntStateOf(
             audioManager?.let { am ->
-                am.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0)
-                if (!am.isVolumeFixed) {
-                    val maxVol = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-                    val curVol = am.getStreamVolume(AudioManager.STREAM_MUSIC)
-                    if (curVol <= (maxVol * 0.3f)) {
-                        am.setStreamVolume(AudioManager.STREAM_MUSIC, (maxVol * 0.85f).toInt().coerceAtLeast(1), 0)
-                    }
+                val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                val cur = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+                if (max > 0) ((cur.toFloat() / max.toFloat()) * 100).toInt() else 100
+            } ?: 100
+        )
+    }
+    var isSystemMuted by remember {
+        mutableStateOf(
+            audioManager?.let { am ->
+                am.isStreamMute(AudioManager.STREAM_MUSIC) || am.getStreamVolume(AudioManager.STREAM_MUSIC) == 0
+            } ?: false
+        )
+    }
+
+    // Real-time synchronization with Android TV system volume (remote rocker +/-)
+    DisposableEffect(context) {
+        val filter = IntentFilter("android.media.VOLUME_CHANGED_ACTION")
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                audioManager?.let { am ->
+                    val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                    val cur = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+                    systemVolumePercent = if (max > 0) ((cur.toFloat() / max.toFloat()) * 100).toInt() else 100
+                    isSystemMuted = am.isStreamMute(AudioManager.STREAM_MUSIC) || cur == 0
                 }
             }
-        } catch (_: Exception) {}
+        }
+        context.registerReceiver(receiver, filter)
+        onDispose {
+            try { context.unregisterReceiver(receiver) } catch (_: Exception) {}
+        }
     }
 
     var lastInteractionTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -194,11 +219,40 @@ fun VideoPlayer(
         ExoPlayer.Builder(context, renderersFactory)
             .setTrackSelector(trackSelector)
             .build().apply {
-                // Must be false on Android TV so Compose focus navigation never silences or ducks audio!
-                setAudioAttributes(audioAttributes, false)
+                setAudioAttributes(audioAttributes, true)
                 volume = 1.0f
                 playWhenReady = true
             }
+    }
+
+    // Instantly pause and silence audio when user exits app, minimizes, or TV enters standby
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, exoPlayer) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_PAUSE,
+                Lifecycle.Event.ON_STOP -> {
+                    if (exoPlayer.isPlaying) {
+                        exoPlayer.pause()
+                    }
+                    exoPlayer.playWhenReady = false
+                    val pos = exoPlayer.currentPosition
+                    val dur = exoPlayer.duration.coerceAtLeast(0L)
+                    if (pos > 0 && dur > 0) {
+                        onSaveProgress(pos, dur)
+                    }
+                }
+                Lifecycle.Event.ON_DESTROY -> {
+                    exoPlayer.stop()
+                    exoPlayer.release()
+                }
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
     val availableQualities = remember { listOf("Auto", "1080p", "720p", "480p", "360p") }
@@ -251,9 +305,13 @@ fun VideoPlayer(
     }
 
     fun toggleMute() {
-        val newMuted = !isMuted
-        isMuted = newMuted
-        exoPlayer.volume = if (newMuted) 0f else 1.0f
+        audioManager?.let { am ->
+            am.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_TOGGLE_MUTE, AudioManager.FLAG_SHOW_UI)
+            val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            val cur = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+            systemVolumePercent = if (max > 0) ((cur.toFloat() / max.toFloat()) * 100).toInt() else 100
+            isSystemMuted = am.isStreamMute(AudioManager.STREAM_MUSIC) || cur == 0
+        }
     }
 
     // Update progress ticker and save to SQLite/Cloud
@@ -326,7 +384,6 @@ fun VideoPlayer(
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
         exoPlayer.volume = 1.0f
-        isMuted = false
     }
 
     DisposableEffect(Unit) {
@@ -334,7 +391,6 @@ fun VideoPlayer(
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_READY) {
                     duration = exoPlayer.duration.coerceAtLeast(0L)
-                    exoPlayer.volume = if (isMuted) 0f else 1.0f
                 } else if (playbackState == Player.STATE_ENDED) {
                     if (!hasHandledEnded) {
                         hasHandledEnded = true
@@ -973,9 +1029,11 @@ fun VideoPlayer(
                             // 1. Skip Intro (+85s)
                             Button(
                                 onClick = {
+                                    markInteraction()
                                     val target = (exoPlayer.currentPosition + 85000).coerceAtMost(duration)
                                     exoPlayer.seekTo(target)
                                 },
+                                enabled = !isAnyDialogOpen,
                                 colors = ButtonDefaults.colors(
                                     containerColor = KuroNamiColors.SurfaceHigh,
                                     focusedContainerColor = KuroNamiColors.Crimson
@@ -985,13 +1043,8 @@ fun VideoPlayer(
                                     .focusRequester(skipIntroRequester)
                                     .onKeyEvent { event ->
                                         if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN) {
+                                            markInteraction()
                                             when (event.nativeKeyEvent.keyCode) {
-                                                android.view.KeyEvent.KEYCODE_DPAD_CENTER,
-                                                android.view.KeyEvent.KEYCODE_ENTER -> {
-                                                    val target = (exoPlayer.currentPosition + 85000).coerceAtMost(duration)
-                                                    exoPlayer.seekTo(target)
-                                                    return@onKeyEvent true
-                                                }
                                                 android.view.KeyEvent.KEYCODE_DPAD_UP -> {
                                                     try { playPauseRequester.requestFocus() } catch (_: Exception) {}
                                                     return@onKeyEvent true
@@ -1000,6 +1053,8 @@ fun VideoPlayer(
                                                     try { nextEpRequester.requestFocus() } catch (_: Exception) {}
                                                     return@onKeyEvent true
                                                 }
+                                                android.view.KeyEvent.KEYCODE_DPAD_LEFT,
+                                                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> return@onKeyEvent true
                                             }
                                         }
                                         false
@@ -1019,7 +1074,11 @@ fun VideoPlayer(
 
                             // 2. Next Episode
                             Button(
-                                onClick = onNextEpisode,
+                                onClick = {
+                                    markInteraction()
+                                    onNextEpisode()
+                                },
+                                enabled = !isAnyDialogOpen,
                                 colors = ButtonDefaults.colors(
                                     containerColor = KuroNamiColors.SurfaceHigh,
                                     focusedContainerColor = KuroNamiColors.Crimson
@@ -1029,12 +1088,8 @@ fun VideoPlayer(
                                     .focusRequester(nextEpRequester)
                                     .onKeyEvent { event ->
                                         if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN) {
+                                            markInteraction()
                                             when (event.nativeKeyEvent.keyCode) {
-                                                android.view.KeyEvent.KEYCODE_DPAD_CENTER,
-                                                android.view.KeyEvent.KEYCODE_ENTER -> {
-                                                    onNextEpisode()
-                                                    return@onKeyEvent true
-                                                }
                                                 android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
                                                     try { skipIntroRequester.requestFocus() } catch (_: Exception) {}
                                                     return@onKeyEvent true
@@ -1047,6 +1102,7 @@ fun VideoPlayer(
                                                     try { playPauseRequester.requestFocus() } catch (_: Exception) {}
                                                     return@onKeyEvent true
                                                 }
+                                                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> return@onKeyEvent true
                                             }
                                         }
                                         false
@@ -1066,7 +1122,11 @@ fun VideoPlayer(
 
                             // 3. Episode Drawer Toggle Button
                             Button(
-                                onClick = onShowEpisodeList,
+                                onClick = {
+                                    markInteraction()
+                                    onShowEpisodeList()
+                                },
+                                enabled = !isAnyDialogOpen,
                                 colors = ButtonDefaults.colors(
                                     containerColor = KuroNamiColors.SurfaceHigh,
                                     focusedContainerColor = KuroNamiColors.Crimson
@@ -1076,12 +1136,8 @@ fun VideoPlayer(
                                     .focusRequester(episodesDrawerRequester)
                                     .onKeyEvent { event ->
                                         if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN) {
+                                            markInteraction()
                                             when (event.nativeKeyEvent.keyCode) {
-                                                android.view.KeyEvent.KEYCODE_DPAD_CENTER,
-                                                android.view.KeyEvent.KEYCODE_ENTER -> {
-                                                    onShowEpisodeList()
-                                                    return@onKeyEvent true
-                                                }
                                                 android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
                                                     try { nextEpRequester.requestFocus() } catch (_: Exception) {}
                                                     return@onKeyEvent true
@@ -1094,6 +1150,7 @@ fun VideoPlayer(
                                                     try { playPauseRequester.requestFocus() } catch (_: Exception) {}
                                                     return@onKeyEvent true
                                                 }
+                                                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> return@onKeyEvent true
                                             }
                                         }
                                         false
@@ -1114,7 +1171,11 @@ fun VideoPlayer(
 
                         // 4. Volume / Unmute Quick Toggle
                         Button(
-                            onClick = { toggleMute() },
+                            onClick = {
+                                markInteraction()
+                                toggleMute()
+                            },
+                            enabled = !isAnyDialogOpen,
                             colors = ButtonDefaults.colors(
                                 containerColor = KuroNamiColors.SurfaceHigh,
                                 focusedContainerColor = KuroNamiColors.Crimson
@@ -1124,12 +1185,8 @@ fun VideoPlayer(
                                 .focusRequester(volumeBtnRequester)
                                 .onKeyEvent { event ->
                                     if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN) {
+                                        markInteraction()
                                         when (event.nativeKeyEvent.keyCode) {
-                                            android.view.KeyEvent.KEYCODE_DPAD_CENTER,
-                                            android.view.KeyEvent.KEYCODE_ENTER -> {
-                                                toggleMute()
-                                                return@onKeyEvent true
-                                            }
                                             android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
                                                 try { episodesDrawerRequester.requestFocus() } catch (_: Exception) {}
                                                 return@onKeyEvent true
@@ -1138,6 +1195,8 @@ fun VideoPlayer(
                                                 try { forwardBtnRequester.requestFocus() } catch (_: Exception) {}
                                                 return@onKeyEvent true
                                             }
+                                            android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                                            android.view.KeyEvent.KEYCODE_DPAD_DOWN -> return@onKeyEvent true
                                         }
                                     }
                                     false
@@ -1145,13 +1204,16 @@ fun VideoPlayer(
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
-                                    if (!isMuted) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
-                                    contentDescription = "Audio Volume",
+                                    if (!isSystemMuted && systemVolumePercent > 0) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
+                                    contentDescription = "System Volume",
                                     tint = Color.White,
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text(if (!isMuted) "Audio: 100%" else "MUTED", fontWeight = FontWeight.Bold)
+                                Text(
+                                    if (isSystemMuted || systemVolumePercent == 0) "TV: MUTED" else "TV: $systemVolumePercent%",
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                         }
                     }
@@ -1233,19 +1295,6 @@ fun VideoPlayer(
                                             Modifier.focusRequester(qualityDialogInitialRequester)
                                         } else Modifier
                                     )
-                                    .onKeyEvent { event ->
-                                        if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN) {
-                                            if (event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER ||
-                                                event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ENTER
-                                            ) {
-                                                applyQuality(q)
-                                                showQualityDialog = false
-                                                try { qualityBtnRequester.requestFocus() } catch (_: Exception) {}
-                                                return@onKeyEvent true
-                                            }
-                                        }
-                                        false
-                                    }
                             ) {
                                 Row(
                                     modifier = Modifier
@@ -1283,20 +1332,7 @@ fun VideoPlayer(
                                 focusedContainerColor = KuroNamiColors.SurfaceHighest
                             ),
                             shape = ButtonDefaults.shape(RoundedCornerShape(8.dp)),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .onKeyEvent { event ->
-                                    if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN) {
-                                        if (event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER ||
-                                            event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ENTER
-                                        ) {
-                                            showQualityDialog = false
-                                            try { qualityBtnRequester.requestFocus() } catch (_: Exception) {}
-                                            return@onKeyEvent true
-                                        }
-                                    }
-                                    false
-                                }
+                            modifier = Modifier.fillMaxWidth()
                         ) {
                             Text("Close Quality Settings", color = Color.White, fontWeight = FontWeight.Bold)
                         }

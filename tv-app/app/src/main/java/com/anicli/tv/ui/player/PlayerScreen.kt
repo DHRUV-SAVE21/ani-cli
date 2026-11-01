@@ -337,14 +337,20 @@ fun PlayerScreen(
 
                                     Spacer(modifier = Modifier.height(16.dp))
 
+                                    val currentEpIndex = remember(episodes, epNum) {
+                                        val idx = episodes.indexOfFirst { it.number == epNum }
+                                        if (idx >= 0) idx else 0
+                                    }
+
                                     TvLazyColumn(
                                         modifier = Modifier
                                             .weight(1f)
                                             .fillMaxWidth(),
                                         verticalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
-                                        items(episodes, key = { it.id }) { ep ->
+                                        itemsIndexed(episodes, key = { _, ep -> ep.id }) { index, ep ->
                                             val isCurrentEp = ep.number == epNum
+                                            val shouldRequestInitialFocus = index == currentEpIndex
                                             Button(
                                                 onClick = {
                                                     showEpisodeDrawer = false
@@ -358,7 +364,7 @@ fun PlayerScreen(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
                                                     .then(
-                                                        if (isCurrentEp) Modifier.focusRequester(episodeDrawerInitialRequester) else Modifier
+                                                        if (shouldRequestInitialFocus) Modifier.focusRequester(episodeDrawerInitialRequester) else Modifier
                                                     )
                                             ) {
                                                 Row(
