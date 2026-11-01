@@ -18,6 +18,9 @@ interface WatchProgressDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertProgress(progress: WatchProgressEntity)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertProgressList(progressList: List<WatchProgressEntity>)
+
     @Query("DELETE FROM watch_progress WHERE mediaId = :mediaId")
     suspend fun deleteProgress(mediaId: String)
 }

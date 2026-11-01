@@ -159,16 +159,42 @@ class PlayerViewModel @Inject constructor(
         lastSavedPositionMs = currentPosition
         viewModelScope.launch {
             try {
-                val title = _cachedAnimeTitle.value.takeIf { it.isNotBlank() } ?: "Anime Stream"
-                val poster = _cachedMediaDetail.value?.posterUrl?.takeIf { it.isNotBlank() }
+                var title = _cachedAnimeTitle.value.takeIf { it.isNotBlank() && it != "Anime Stream" }
+                    ?: mediaDetailCache[mediaId]?.title?.takeIf { it.isNotBlank() && it != "Anime Stream" }
+                var poster = _cachedMediaDetail.value?.posterUrl?.takeIf { it.isNotBlank() }
                     ?: _cachedMediaDetail.value?.backdropUrl?.takeIf { it.isNotBlank() }
-                    ?: ""
+                    ?: mediaDetailCache[mediaId]?.posterUrl?.takeIf { it.isNotBlank() }
+                    ?: mediaDetailCache[mediaId]?.backdropUrl?.takeIf { it.isNotBlank() }
+
+                // Fallback to existing saved progress poster/title if available
+                if (title.isNullOrBlank() || poster.isNullOrBlank()) {
+                    val existing = watchProgressDao.getProgressForMedia(mediaId)
+                    if (title.isNullOrBlank()) title = existing?.mediaTitle?.takeIf { it.isNotBlank() && it != "Anime Stream" }
+                    if (poster.isNullOrBlank()) poster = existing?.posterUrl?.takeIf { it.isNotBlank() }
+                }
+
+                // If still missing, query provider for real details
+                if (title.isNullOrBlank() || poster.isNullOrBlank()) {
+                    try {
+                        val detailResult = providerSelector.getActiveProvider().getDetails(mediaId)
+                        detailResult.onSuccess { detail ->
+                            mediaDetailCache[mediaId] = detail
+                            _cachedMediaDetail.value = detail
+                            _cachedAnimeTitle.value = detail.title
+                            title = detail.title
+                            poster = detail.posterUrl.takeIf { it.isNotBlank() } ?: detail.backdropUrl
+                        }
+                    } catch (_: Exception) {}
+                }
+
+                val finalTitle = title?.takeIf { it.isNotBlank() } ?: "Anime Stream"
+                val finalPoster = poster?.takeIf { it.isNotBlank() } ?: ""
 
                 val epId = currentEpisodeId.ifBlank { "$mediaId|$epNum" }
                 webUserRepository.saveHistory(
                     animeId = mediaId,
-                    title = title,
-                    poster = poster,
+                    title = finalTitle,
+                    poster = finalPoster,
                     epNum = epNum.toFloat(),
                     episodeId = epId,
                     progressMs = currentPosition,

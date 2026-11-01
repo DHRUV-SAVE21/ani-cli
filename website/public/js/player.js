@@ -529,18 +529,72 @@ class AnimePlayer {
         self.handleFullscreenChange(isFull);
       });
 
-      // Clean any raw or escaped HTML tags in subtitle lines so <i> or <b> never display as literal text
-      this.art.on('subtitleAfterUpdate', () => {
-        try {
-          const subLines = self.art.template?.$subtitle?.querySelectorAll('.art-subtitle-line');
-          if (subLines) {
-            subLines.forEach(line => {
-              if (line.innerHTML.includes('&lt;i&gt;') || line.innerHTML.includes('&lt;/i&gt;') || line.innerHTML.includes('&lt;b&gt;') || line.innerHTML.includes('&lt;/b&gt;')) {
-                line.innerHTML = line.innerHTML
-                  .replace(/&lt;(\/?[a-zA-Z0-9]+)&gt;/gi, '<$1>');
+      // Synchronize with native browser & device fullscreen events
+      const onNativeFsChange = () => {
+        const isFull = !!(document.fullscreenElement || document.webkitFullscreenElement || (self.art && (self.art.fullscreen || self.art.fullscreenWeb)));
+        self.handleFullscreenChange(isFull);
+      };
+      document.addEventListener('fullscreenchange', onNativeFsChange);
+      document.addEventListener('webkitfullscreenchange', onNativeFsChange);
+      this._nativeFsListener = onNativeFsChange;
+
+      // Handle physical device rotation while in fullscreen
+      const onOrientationChange = () => {
+        if (document.body.classList.contains('player-in-fullscreen')) {
+          setTimeout(() => {
+            const isPortrait = window.matchMedia('(orientation: portrait)').matches || window.innerHeight > window.innerWidth;
+            if (isPortrait) {
+              if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+                document.body.classList.add('player-forced-landscape');
               }
-            });
+            } else {
+              document.body.classList.remove('player-forced-landscape');
+            }
+          }, 150);
+        }
+      };
+      window.addEventListener('orientationchange', onOrientationChange);
+      window.addEventListener('resize', onOrientationChange);
+      this._orientationListener = onOrientationChange;
+
+      // Clean raw or escaped HTML tags in subtitles so <i> or <b> never display as literal text
+      const cleanSubLine = (el) => {
+        if (!el) return;
+        try {
+          if (el.nodeType === 3) {
+            // Text node containing literal tags
+            if (el.nodeValue && /<\/?(i|b|u|c|em|strong)[^>]*>/i.test(el.nodeValue)) {
+              const span = document.createElement('span');
+              span.innerHTML = el.nodeValue;
+              el.parentNode?.replaceChild(span, el);
+            }
+          } else if (el.innerHTML && (el.innerHTML.includes('&lt;') || el.innerHTML.includes('&gt;'))) {
+            el.innerHTML = el.innerHTML
+              .replace(/&lt;(\/?[a-zA-Z0-9]+)&gt;/gi, '<$1>')
+              .replace(/&lt;(\/?[a-zA-Z0-9]+)\s+([^&]*?)&gt;/gi, '<$1 $2>');
           }
+        } catch (e) {}
+      };
+
+      if (this.art.template?.$subtitle) {
+        const subObserver = new MutationObserver(() => {
+          try {
+            const lines = self.art.template.$subtitle.querySelectorAll('.art-subtitle-line, p, span');
+            if (lines && lines.length > 0) {
+              lines.forEach(l => cleanSubLine(l));
+            } else {
+              cleanSubLine(self.art.template.$subtitle);
+            }
+          } catch (e) {}
+        });
+        subObserver.observe(this.art.template.$subtitle, { childList: true, subtree: true, characterData: true });
+        this._subObserver = subObserver;
+      }
+
+      this.art.on('subtitleUpdate', () => {
+        try {
+          const lines = self.art.template?.$subtitle?.querySelectorAll('.art-subtitle-line, p, span');
+          if (lines) lines.forEach(l => cleanSubLine(l));
         } catch (e) {}
       });
 
@@ -644,38 +698,85 @@ class AnimePlayer {
   async toggleFullscreen() {
     if (!this.art) return false;
 
-    const isCurrentlyFull = !!(this.art.fullscreen || this.art.fullscreenWeb || document.fullscreenElement);
+    const isCurrentlyFull = !!(
+      this.art.fullscreen ||
+      this.art.fullscreenWeb ||
+      document.fullscreenElement ||
+      document.webkitFullscreenElement ||
+      document.body.classList.contains('player-in-fullscreen') ||
+      document.body.classList.contains('player-forced-landscape')
+    );
 
     if (isCurrentlyFull) {
-      if (this.art.fullscreen) this.art.fullscreen = false;
-      if (this.art.fullscreenWeb) this.art.fullscreenWeb = false;
-      if (document.fullscreenElement) {
-        try { await document.exitFullscreen(); } catch (e) {}
-      }
-      this.handleFullscreenChange(false);
+      await this.exitFullscreen();
       return false;
+    } else {
+      await this.enterFullscreen();
+      return true;
     }
+  }
 
-    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (window.innerWidth < 768 && 'ontouchstart' in window);
+  async enterFullscreen() {
+    if (!this.art) return false;
+    const playerEl = this.art.template?.$player || this.art.element;
     const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
-    // Standard HTML5 Fullscreen (Desktop & Android Chrome/Firefox)
+    document.body.classList.add('player-in-fullscreen');
+
     const canNativeFs = !!(document.fullscreenEnabled || document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
 
     if (canNativeFs && !isIOS) {
       try {
-        this.art.fullscreen = true;
-        this.handleFullscreenChange(true);
-        return true;
+        if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+          if (playerEl && playerEl.requestFullscreen) {
+            await playerEl.requestFullscreen();
+          } else if (playerEl && playerEl.webkitRequestFullscreen) {
+            await playerEl.webkitRequestFullscreen();
+          } else {
+            this.art.fullscreen = true;
+          }
+        }
       } catch (err) {
-        console.warn('[Player] Native fullscreen failed, attempting web fullscreen:', err);
+        console.warn('[Player] Native requestFullscreen failed, using web fullscreen fallback:', err);
+        this.art.fullscreenWeb = true;
       }
+    } else {
+      this.art.fullscreenWeb = true;
     }
 
-    // Web Fullscreen Fallback (100% reliable on iOS Safari, PWA, and all mobile viewports)
-    this.art.fullscreenWeb = true;
-    this.handleFullscreenChange(true);
+    await this.applyOrientation(true);
+    this.updateFullscreenIcons(true);
+    if (typeof this.onFullscreenChange === 'function') {
+      this.onFullscreenChange(true);
+    }
     return true;
+  }
+
+  async exitFullscreen() {
+    if (!this.art) return false;
+
+    try {
+      if (this.art.fullscreen) this.art.fullscreen = false;
+      if (this.art.fullscreenWeb) this.art.fullscreenWeb = false;
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else if (document.webkitFullscreenElement) {
+        await document.webkitExitFullscreen();
+      }
+    } catch (e) {}
+
+    document.body.classList.remove('player-in-fullscreen');
+    document.body.classList.remove('player-forced-landscape');
+
+    if (screen.orientation && typeof screen.orientation.unlock === 'function') {
+      try { screen.orientation.unlock(); } catch (e) {}
+    }
+
+    this.updateFullscreenIcons(false);
+    if (typeof this.onFullscreenChange === 'function') {
+      this.onFullscreenChange(false);
+    }
+    return false;
   }
 
   /**
@@ -684,28 +785,64 @@ class AnimePlayer {
   async handleFullscreenChange(isFull) {
     if (isFull) {
       document.body.classList.add('player-in-fullscreen');
-
-      // Attempt screen orientation lock to landscape on mobile devices
-      if (screen.orientation && typeof screen.orientation.lock === 'function') {
-        try {
-          await screen.orientation.lock('landscape');
-        } catch (e) {
-          console.warn('[Player] screen.orientation.lock unavailable or denied:', e.message);
-        }
-      }
+      await this.applyOrientation(true);
     } else {
       document.body.classList.remove('player-in-fullscreen');
-
+      document.body.classList.remove('player-forced-landscape');
       if (screen.orientation && typeof screen.orientation.unlock === 'function') {
-        try {
-          screen.orientation.unlock();
-        } catch (e) {}
+        try { screen.orientation.unlock(); } catch (e) {}
       }
     }
 
     this.updateFullscreenIcons(isFull);
     if (typeof this.onFullscreenChange === 'function') {
       this.onFullscreenChange(isFull);
+    }
+  }
+
+  /**
+   * Attempts hardware landscape lock, with instant CSS rotation fallback for iOS & portrait devices
+   */
+  async applyOrientation(isFull) {
+    if (!isFull) {
+      document.body.classList.remove('player-forced-landscape');
+      if (screen.orientation && typeof screen.orientation.unlock === 'function') {
+        try { screen.orientation.unlock(); } catch (e) {}
+      }
+      return;
+    }
+
+    const isTouchOrMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || ('ontouchstart' in window && window.innerWidth < 1024);
+    let locked = false;
+
+    // 1. Attempt Screen Orientation API lock
+    if (screen.orientation && typeof screen.orientation.lock === 'function') {
+      // Allow DOM to settle into fullscreenElement
+      for (let i = 0; i < 4; i++) {
+        if (document.fullscreenElement || document.webkitFullscreenElement) break;
+        await new Promise(r => setTimeout(r, 40));
+      }
+      try {
+        await screen.orientation.lock('landscape');
+        locked = true;
+      } catch (e1) {
+        try {
+          await screen.orientation.lock('landscape-primary');
+          locked = true;
+        } catch (e2) {
+          locked = false;
+        }
+      }
+    }
+
+    // 2. Fallback: If hardware lock failed or unsupported (iOS Safari, Android orientation-locked), force CSS landscape rotation
+    if (!locked && isTouchOrMobile) {
+      const isPortrait = window.matchMedia('(orientation: portrait)').matches || window.innerHeight > window.innerWidth;
+      if (isPortrait) {
+        document.body.classList.add('player-forced-landscape');
+      } else {
+        document.body.classList.remove('player-forced-landscape');
+      }
     }
   }
 
@@ -740,6 +877,23 @@ class AnimePlayer {
    */
   stop() {
     document.body.classList.remove('player-in-fullscreen');
+    document.body.classList.remove('player-forced-landscape');
+
+    if (this._nativeFsListener) {
+      document.removeEventListener('fullscreenchange', this._nativeFsListener);
+      document.removeEventListener('webkitfullscreenchange', this._nativeFsListener);
+      this._nativeFsListener = null;
+    }
+    if (this._orientationListener) {
+      window.removeEventListener('orientationchange', this._orientationListener);
+      window.removeEventListener('resize', this._orientationListener);
+      this._orientationListener = null;
+    }
+    if (this._subObserver) {
+      this._subObserver.disconnect();
+      this._subObserver = null;
+    }
+
     if (screen.orientation && typeof screen.orientation.unlock === 'function') {
       try { screen.orientation.unlock(); } catch (e) {}
     }

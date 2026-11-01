@@ -126,26 +126,45 @@ fun VideoPlayer(
         } catch (_: Exception) {}
     }
 
-    // Auto-hide controller after 10 seconds of active playback (paused when dialogs or drawers are open)
-    LaunchedEffect(showController, isPlaying, showQualityDialog, isOverlayDialogOpen) {
-        if (showController && isPlaying && !showQualityDialog && !isOverlayDialogOpen) {
-            delay(10000)
+    var lastInteractionTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    fun markInteraction() {
+        lastInteractionTime = System.currentTimeMillis()
+    }
+
+    val isAnyDialogOpen = showQualityDialog || isOverlayDialogOpen
+
+    // Auto-hide controller after 8 seconds of active playback without user interaction (paused when dialogs or drawers are open)
+    LaunchedEffect(showController, isPlaying, showQualityDialog, isOverlayDialogOpen, lastInteractionTime) {
+        if (showController && isPlaying && !isAnyDialogOpen) {
+            delay(8000)
             showController = false
         }
     }
 
     LaunchedEffect(showController) {
         onControllerVisibilityChanged(showController)
+        if (showController) {
+            delay(60)
+            try { playPauseRequester.requestFocus() } catch (_: Exception) {}
+        }
     }
 
-    // Initial focus on Play/Pause when screen first appears
-    LaunchedEffect(Unit) {
-        delay(120)
-        try { playPauseRequester.requestFocus() } catch (_: Exception) {}
+    LaunchedEffect(isOverlayDialogOpen) {
+        if (!isOverlayDialogOpen && showController) {
+            delay(60)
+            try { playPauseRequester.requestFocus() } catch (_: Exception) {}
+        }
+    }
+
+    LaunchedEffect(showQualityDialog) {
+        if (!showQualityDialog && showController) {
+            delay(60)
+            try { qualityBtnRequester.requestFocus() } catch (_: Exception) {}
+        }
     }
 
     // Dismiss controller on Back press when visible and no subdialog is open
-    BackHandler(enabled = showController && !showQualityDialog) {
+    BackHandler(enabled = showController && !isAnyDialogOpen) {
         showController = false
     }
 
@@ -249,18 +268,21 @@ fun VideoPlayer(
     LaunchedEffect(exoPlayer) {
         var tickCount = 0
         while (true) {
+            val pos = exoPlayer.currentPosition
+            val dur = exoPlayer.duration.coerceAtLeast(0L)
+            val buf = exoPlayer.bufferedPosition.coerceAtLeast(0L)
+            if (showController) {
+                currentPosition = pos
+                duration = dur
+                bufferedPosition = buf
+            }
             if (exoPlayer.isPlaying) {
-                if (showController) {
-                    currentPosition = exoPlayer.currentPosition
-                    duration = exoPlayer.duration.coerceAtLeast(0L)
-                    bufferedPosition = exoPlayer.bufferedPosition.coerceAtLeast(0L)
-                }
                 tickCount++
                 if (tickCount >= 8) {
                     tickCount = 0
-                    onSaveProgress(exoPlayer.currentPosition, exoPlayer.duration.coerceAtLeast(0L))
+                    onSaveProgress(pos, dur)
                 }
-            } else if (duration > 5000L && currentPosition >= (duration - 800L) && !hasHandledEnded) {
+            } else if (dur > 5000L && pos >= (dur - 800L) && !hasHandledEnded) {
                 hasHandledEnded = true
                 currentOnNextEpisode()
             }
@@ -388,7 +410,8 @@ fun VideoPlayer(
         // Backdrop listener when controller is hidden: any directional or select key brings back HUD
         if (!showController) {
             val invisibleFocusRequester = remember { FocusRequester() }
-            LaunchedEffect(Unit) {
+            LaunchedEffect(showController) {
+                delay(60)
                 try { invisibleFocusRequester.requestFocus() } catch (_: Exception) {}
             }
             Box(
@@ -398,17 +421,42 @@ fun VideoPlayer(
                     .focusable()
                     .clickable {
                         showController = true
+                        markInteraction()
                         try { playPauseRequester.requestFocus() } catch (_: Exception) {}
                     }
                     .onKeyEvent { event ->
                         if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN) {
-                            // Let Back key pass through to exit player cleanly
-                            if (event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK) {
-                                return@onKeyEvent false
+                            when (event.nativeKeyEvent.keyCode) {
+                                android.view.KeyEvent.KEYCODE_BACK -> return@onKeyEvent false
+                                android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+                                android.view.KeyEvent.KEYCODE_ENTER -> {
+                                    if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
+                                    showController = true
+                                    markInteraction()
+                                    try { playPauseRequester.requestFocus() } catch (_: Exception) {}
+                                    return@onKeyEvent true
+                                }
+                                android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
+                                    exoPlayer.seekTo((exoPlayer.currentPosition - 10000).coerceAtLeast(0L))
+                                    showController = true
+                                    markInteraction()
+                                    try { rewindBtnRequester.requestFocus() } catch (_: Exception) {}
+                                    return@onKeyEvent true
+                                }
+                                android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                                    exoPlayer.seekTo((exoPlayer.currentPosition + 10000).coerceAtMost(duration))
+                                    showController = true
+                                    markInteraction()
+                                    try { forwardBtnRequester.requestFocus() } catch (_: Exception) {}
+                                    return@onKeyEvent true
+                                }
+                                else -> {
+                                    showController = true
+                                    markInteraction()
+                                    try { playPauseRequester.requestFocus() } catch (_: Exception) {}
+                                    return@onKeyEvent true
+                                }
                             }
-                            showController = true
-                            try { playPauseRequester.requestFocus() } catch (_: Exception) {}
-                            return@onKeyEvent true
                         }
                         false
                     }
@@ -522,7 +570,11 @@ fun VideoPlayer(
                     ) {
                         // 1. Audio Mode Toggle (SUB / DUB)
                         Button(
-                            onClick = onToggleAudioMode,
+                            onClick = {
+                                markInteraction()
+                                onToggleAudioMode()
+                            },
+                            enabled = !isAnyDialogOpen,
                             colors = ButtonDefaults.colors(
                                 containerColor = if (audioMode == "sub") KuroNamiColors.CyanContainer else KuroNamiColors.SurfaceHigh,
                                 focusedContainerColor = KuroNamiColors.Crimson
@@ -532,12 +584,8 @@ fun VideoPlayer(
                                 .focusRequester(audioBtnRequester)
                                 .onKeyEvent { event ->
                                     if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN) {
+                                        markInteraction()
                                         when (event.nativeKeyEvent.keyCode) {
-                                            android.view.KeyEvent.KEYCODE_DPAD_CENTER,
-                                            android.view.KeyEvent.KEYCODE_ENTER -> {
-                                                onToggleAudioMode()
-                                                return@onKeyEvent true
-                                            }
                                             android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
                                                 try { ccBtnRequester.requestFocus() } catch (_: Exception) {}
                                                 return@onKeyEvent true
@@ -546,6 +594,8 @@ fun VideoPlayer(
                                                 try { playPauseRequester.requestFocus() } catch (_: Exception) {}
                                                 return@onKeyEvent true
                                             }
+                                            android.view.KeyEvent.KEYCODE_DPAD_LEFT,
+                                            android.view.KeyEvent.KEYCODE_DPAD_UP -> return@onKeyEvent true
                                         }
                                     }
                                     false
@@ -560,7 +610,11 @@ fun VideoPlayer(
 
                         // 2. Closed Captions Toggle
                         Button(
-                            onClick = { toggleCaptions() },
+                            onClick = {
+                                markInteraction()
+                                toggleCaptions()
+                            },
+                            enabled = !isAnyDialogOpen,
                             colors = ButtonDefaults.colors(
                                 containerColor = if (captionsEnabled) KuroNamiColors.CyanContainer else KuroNamiColors.SurfaceHigh,
                                 focusedContainerColor = KuroNamiColors.Crimson
@@ -570,12 +624,8 @@ fun VideoPlayer(
                                 .focusRequester(ccBtnRequester)
                                 .onKeyEvent { event ->
                                     if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN) {
+                                        markInteraction()
                                         when (event.nativeKeyEvent.keyCode) {
-                                            android.view.KeyEvent.KEYCODE_DPAD_CENTER,
-                                            android.view.KeyEvent.KEYCODE_ENTER -> {
-                                                toggleCaptions()
-                                                return@onKeyEvent true
-                                            }
                                             android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
                                                 try { audioBtnRequester.requestFocus() } catch (_: Exception) {}
                                                 return@onKeyEvent true
@@ -588,6 +638,7 @@ fun VideoPlayer(
                                                 try { playPauseRequester.requestFocus() } catch (_: Exception) {}
                                                 return@onKeyEvent true
                                             }
+                                            android.view.KeyEvent.KEYCODE_DPAD_UP -> return@onKeyEvent true
                                         }
                                     }
                                     false
@@ -611,7 +662,11 @@ fun VideoPlayer(
 
                         // 3. Video Quality Selector Dialog Trigger
                         Button(
-                            onClick = { showQualityDialog = true },
+                            onClick = {
+                                markInteraction()
+                                showQualityDialog = true
+                            },
+                            enabled = !isAnyDialogOpen,
                             colors = ButtonDefaults.colors(
                                 containerColor = KuroNamiColors.SurfaceHigh,
                                 focusedContainerColor = KuroNamiColors.Crimson
@@ -621,12 +676,8 @@ fun VideoPlayer(
                                 .focusRequester(qualityBtnRequester)
                                 .onKeyEvent { event ->
                                     if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN) {
+                                        markInteraction()
                                         when (event.nativeKeyEvent.keyCode) {
-                                            android.view.KeyEvent.KEYCODE_DPAD_CENTER,
-                                            android.view.KeyEvent.KEYCODE_ENTER -> {
-                                                showQualityDialog = true
-                                                return@onKeyEvent true
-                                            }
                                             android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
                                                 try { ccBtnRequester.requestFocus() } catch (_: Exception) {}
                                                 return@onKeyEvent true
@@ -639,6 +690,7 @@ fun VideoPlayer(
                                                 try { playPauseRequester.requestFocus() } catch (_: Exception) {}
                                                 return@onKeyEvent true
                                             }
+                                            android.view.KeyEvent.KEYCODE_DPAD_UP -> return@onKeyEvent true
                                         }
                                     }
                                     false
@@ -663,7 +715,11 @@ fun VideoPlayer(
 
                         // 4. Sources / More Button Trigger
                         Button(
-                            onClick = onShowQualitySelector,
+                            onClick = {
+                                markInteraction()
+                                onShowQualitySelector()
+                            },
+                            enabled = !isAnyDialogOpen,
                             colors = ButtonDefaults.colors(
                                 containerColor = KuroNamiColors.SurfaceHigh,
                                 focusedContainerColor = KuroNamiColors.Crimson
@@ -673,12 +729,8 @@ fun VideoPlayer(
                                 .focusRequester(sourcesBtnRequester)
                                 .onKeyEvent { event ->
                                     if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN) {
+                                        markInteraction()
                                         when (event.nativeKeyEvent.keyCode) {
-                                            android.view.KeyEvent.KEYCODE_DPAD_CENTER,
-                                            android.view.KeyEvent.KEYCODE_ENTER -> {
-                                                onShowQualitySelector()
-                                                return@onKeyEvent true
-                                            }
                                             android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
                                                 try { qualityBtnRequester.requestFocus() } catch (_: Exception) {}
                                                 return@onKeyEvent true
@@ -687,6 +739,8 @@ fun VideoPlayer(
                                                 try { forwardBtnRequester.requestFocus() } catch (_: Exception) {}
                                                 return@onKeyEvent true
                                             }
+                                            android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                                            android.view.KeyEvent.KEYCODE_DPAD_UP -> return@onKeyEvent true
                                         }
                                     }
                                     false
@@ -705,7 +759,11 @@ fun VideoPlayer(
                 ) {
                     // Rewind 10s
                     IconButton(
-                        onClick = { exoPlayer.seekTo((exoPlayer.currentPosition - 10000).coerceAtLeast(0L)) },
+                        onClick = {
+                            markInteraction()
+                            exoPlayer.seekTo((exoPlayer.currentPosition - 10000).coerceAtLeast(0L))
+                        },
+                        enabled = !isAnyDialogOpen,
                         colors = IconButtonDefaults.colors(
                             containerColor = KuroNamiColors.SurfaceHigh.copy(alpha = 0.7f),
                             focusedContainerColor = KuroNamiColors.SurfaceHighest
@@ -716,12 +774,8 @@ fun VideoPlayer(
                             .border(1.dp, KuroNamiColors.Outline.copy(alpha = 0.3f), CircleShape)
                             .onKeyEvent { event ->
                                 if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN) {
+                                    markInteraction()
                                     when (event.nativeKeyEvent.keyCode) {
-                                        android.view.KeyEvent.KEYCODE_DPAD_CENTER,
-                                        android.view.KeyEvent.KEYCODE_ENTER -> {
-                                            exoPlayer.seekTo((exoPlayer.currentPosition - 10000).coerceAtLeast(0L))
-                                            return@onKeyEvent true
-                                        }
                                         android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
                                             try { playPauseRequester.requestFocus() } catch (_: Exception) {}
                                             return@onKeyEvent true
@@ -734,6 +788,7 @@ fun VideoPlayer(
                                             try { skipIntroRequester.requestFocus() } catch (_: Exception) {}
                                             return@onKeyEvent true
                                         }
+                                        android.view.KeyEvent.KEYCODE_DPAD_LEFT -> return@onKeyEvent true
                                     }
                                 }
                                 false
@@ -750,12 +805,14 @@ fun VideoPlayer(
                     // Play / Pause Main Glow Pill
                     IconButton(
                         onClick = {
+                            markInteraction()
                             if (exoPlayer.isPlaying) {
                                 exoPlayer.pause()
                             } else {
                                 exoPlayer.play()
                             }
                         },
+                        enabled = !isAnyDialogOpen,
                         colors = IconButtonDefaults.colors(
                             containerColor = KuroNamiColors.Crimson,
                             focusedContainerColor = KuroNamiColors.CrimsonContainer
@@ -766,12 +823,8 @@ fun VideoPlayer(
                             .border(2.5.dp, KuroNamiColors.CyanSoft.copy(alpha = 0.7f), CircleShape)
                             .onKeyEvent { event ->
                                 if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN) {
+                                    markInteraction()
                                     when (event.nativeKeyEvent.keyCode) {
-                                        android.view.KeyEvent.KEYCODE_DPAD_CENTER,
-                                        android.view.KeyEvent.KEYCODE_ENTER -> {
-                                            if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
-                                            return@onKeyEvent true
-                                        }
                                         android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
                                             try { rewindBtnRequester.requestFocus() } catch (_: Exception) {}
                                             return@onKeyEvent true
@@ -803,7 +856,11 @@ fun VideoPlayer(
 
                     // Forward 10s
                     IconButton(
-                        onClick = { exoPlayer.seekTo((exoPlayer.currentPosition + 10000).coerceAtMost(duration)) },
+                        onClick = {
+                            markInteraction()
+                            exoPlayer.seekTo((exoPlayer.currentPosition + 10000).coerceAtMost(duration))
+                        },
+                        enabled = !isAnyDialogOpen,
                         colors = IconButtonDefaults.colors(
                             containerColor = KuroNamiColors.SurfaceHigh.copy(alpha = 0.7f),
                             focusedContainerColor = KuroNamiColors.SurfaceHighest
@@ -814,12 +871,8 @@ fun VideoPlayer(
                             .border(1.dp, KuroNamiColors.Outline.copy(alpha = 0.3f), CircleShape)
                             .onKeyEvent { event ->
                                 if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN) {
+                                    markInteraction()
                                     when (event.nativeKeyEvent.keyCode) {
-                                        android.view.KeyEvent.KEYCODE_DPAD_CENTER,
-                                        android.view.KeyEvent.KEYCODE_ENTER -> {
-                                            exoPlayer.seekTo((exoPlayer.currentPosition + 10000).coerceAtMost(duration))
-                                            return@onKeyEvent true
-                                        }
                                         android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
                                             try { playPauseRequester.requestFocus() } catch (_: Exception) {}
                                             return@onKeyEvent true
@@ -832,6 +885,7 @@ fun VideoPlayer(
                                             try { nextEpRequester.requestFocus() } catch (_: Exception) {}
                                             return@onKeyEvent true
                                         }
+                                        android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> return@onKeyEvent true
                                     }
                                 }
                                 false

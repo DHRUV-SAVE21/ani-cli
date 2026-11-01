@@ -72,7 +72,13 @@ router.get('/history', requireAuth, async (req, res) => {
  * Save or update watch progress
  */
 router.post('/history', requireAuth, async (req, res) => {
-  const { animeId, animeTitle, poster, episodeNum, episodeId, progressSeconds, durationSeconds } = req.body;
+  const animeId = req.body.animeId || req.body.anime_id;
+  const animeTitle = req.body.animeTitle || req.body.anime_title || 'Anime';
+  const poster = req.body.poster || req.body.poster_image || '';
+  const episodeNum = Number(req.body.episodeNum || req.body.episode_num) || 1;
+  const episodeId = String(req.body.episodeId || req.body.episode_id || '');
+  const progressSeconds = Number(req.body.progressSeconds ?? req.body.progress_seconds) || 0;
+  const durationSeconds = Number(req.body.durationSeconds ?? req.body.duration_seconds) || 0;
 
   if (!animeId) {
     return res.status(400).json({ success: false, error: 'animeId is required' });

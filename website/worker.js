@@ -518,6 +518,8 @@ export default {
           INSERT INTO watch_history (user_id, anime_id, anime_title, poster, episode_num, episode_id, progress_seconds, duration_seconds, updated_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(user_id, anime_id) DO UPDATE SET
+            anime_title = excluded.anime_title,
+            poster = excluded.poster,
             episode_num = excluded.episode_num,
             episode_id = excluded.episode_id,
             progress_seconds = excluded.progress_seconds,

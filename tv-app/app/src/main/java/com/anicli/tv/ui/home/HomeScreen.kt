@@ -244,6 +244,7 @@ fun HomeScreen(
                                     onClick = {
                                         viewModel.removeFromContinueWatching(item.id)
                                         itemToRemoveFromContinueWatching = null
+                                        try { initialFocusRequester.requestFocus() } catch (_: Exception) {}
                                     },
                                     colors = ButtonDefaults.colors(
                                         containerColor = KuroNamiColors.Crimson,

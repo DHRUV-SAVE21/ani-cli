@@ -243,6 +243,7 @@ document.addEventListener('DOMContentLoaded', () => {
   state.player.onPrevEpisode = () => playPrevEpisode();
   state.player.onToggleMode = () => switchGlobalAudio(state.currentMode === 'sub' ? 'dub' : 'sub');
   window.appState = state;
+  window.artplayerInstance = state.player;
 
   // Captions Toggle Sync
   state.player.onCaptionsToggle = (isEnabled) => {
@@ -293,17 +294,27 @@ document.addEventListener('DOMContentLoaded', () => {
     showToast(`Streaming Quality: ${label}`, 'info');
   };
 
-  // Stop video & audio when user unloads or leaves tab
-  window.addEventListener('beforeunload', () => { if (state.player) state.player.stop(); });
-  window.addEventListener('pagehide', () => { if (state.player) state.player.stop(); });
+  // Stop video & audio when user unloads or leaves tab, flushing latest progress
+  window.addEventListener('beforeunload', () => {
+    if (state.player && state.player.art && state.player.art.currentTime > 2 && state.currentAnime) {
+      recordWatchProgress(state.player.art.currentTime, state.player.art.duration);
+    }
+    if (state.player) state.player.stop();
+  });
+  window.addEventListener('pagehide', () => {
+    if (state.player && state.player.art && state.player.art.currentTime > 2 && state.currentAnime) {
+      recordWatchProgress(state.player.art.currentTime, state.player.art.duration);
+    }
+    if (state.player) state.player.stop();
+  });
 
   // Progress sync debouncer
   let lastSyncTime = 0;
   state.player.onTimeUpdate = (currentTime, duration) => {
     const now = Date.now();
-    if (now - lastSyncTime > 4000 && state.currentAnime) {
+    if (now - lastSyncTime > 3000 && state.currentAnime && currentTime > 1) {
       lastSyncTime = now;
-      syncProgressToBackend(currentTime, duration);
+      recordWatchProgress(currentTime, duration);
     }
   };
 
@@ -312,7 +323,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   window.getWatchUrl = (animeId, ep = 1, t = 0) => {
     const mode = state.currentMode || localStorage.getItem('omcli_preferred_audio') || 'sub';
-    return `#watch?anime=${animeId}&ep=${ep}${t ? `&t=${t}` : ''}&mode=${mode}`;
+    const cleanTime = Math.round(Number(t) || 0);
+    return `#watch?anime=${animeId}&ep=${ep}${cleanTime > 0 ? `&t=${cleanTime}` : ''}&mode=${mode}`;
+  };
+
+  window.navigateToWatch = (animeId, ep = 1, t = 0) => {
+    const mode = state.currentMode || localStorage.getItem('omcli_preferred_audio') || 'sub';
+    const cleanTime = Math.round(Number(t) || 0);
+    navigateTo(`watch?anime=${animeId}&ep=${ep}${cleanTime > 0 ? `&t=${cleanTime}` : ''}&mode=${mode}`);
   };
 
   // Safe initial default for hero play button
@@ -721,6 +739,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // STOP AUDIO / VIDEO PLAYBACK IMMEDIATELY IF LEAVING WATCH VIEW!
     if (path !== 'watch' && state.player) {
+      if (state.player.art && state.player.art.currentTime > 2 && state.currentAnime) {
+        recordWatchProgress(state.player.art.currentTime, state.player.art.duration);
+      }
       state.player.stop();
       state.currentAnime = null;
     }
@@ -1158,6 +1179,108 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // ============================================================================
+  // WATCH PROGRESS & CONTINUE WATCHING MANAGEMENT
+  // ============================================================================
+
+  function saveLocalWatchProgress(entry) {
+    if (!entry || !entry.animeId) return;
+    try {
+      const animeId = String(entry.animeId);
+      const animeTitle = String(entry.animeTitle || entry.title || 'Anime');
+      const poster = String(entry.poster || entry.poster_image || '');
+      const episodeNum = parseInt(entry.episodeNum || entry.episode_num) || 1;
+      const episodeId = String(entry.episodeId || entry.episode_id || '');
+      const progressSeconds = Math.round(Number(entry.progressSeconds ?? entry.progress_seconds) || 0);
+      const durationSeconds = Math.round(Number(entry.durationSeconds ?? entry.duration_seconds) || 1420);
+      const now = Date.now();
+
+      // 1. Maintain structured omcli_local_history array (deduplicated by anime_id)
+      let history = [];
+      try {
+        history = JSON.parse(localStorage.getItem('omcli_local_history') || '[]');
+        if (!Array.isArray(history)) history = [];
+      } catch {
+        history = [];
+      }
+
+      // Deduplicate: remove previous entry for this anime
+      history = history.filter(h => String(h.anime_id) !== animeId);
+
+      // Add updated entry to top
+      history.unshift({
+        anime_id: animeId,
+        anime_title: animeTitle,
+        poster: poster,
+        episode_num: episodeNum,
+        episode_id: episodeId,
+        progress_seconds: progressSeconds,
+        duration_seconds: durationSeconds,
+        updated_at: now
+      });
+
+      if (history.length > 25) history = history.slice(0, 25);
+      localStorage.setItem('omcli_local_history', JSON.stringify(history));
+
+      // 2. Direct progress keys for in-player resume
+      localStorage.setItem(`ani_progress_${animeId}`, JSON.stringify({
+        animeId,
+        title: animeTitle,
+        poster,
+        episode: episodeNum,
+        episodeId,
+        time: progressSeconds,
+        duration: durationSeconds,
+        updatedAt: now
+      }));
+
+      if (episodeId) {
+        localStorage.setItem(`ani_progress_${episodeId}`, JSON.stringify({
+          animeId,
+          title: animeTitle,
+          poster,
+          episode: episodeNum,
+          time: progressSeconds,
+          duration: durationSeconds,
+          updatedAt: now
+        }));
+      }
+    } catch (err) {
+      console.warn('[History] Local save error:', err);
+    }
+  }
+
+  window.saveLocalWatchProgress = saveLocalWatchProgress;
+
+  function recordWatchProgress(currentTime, duration) {
+    if (!state.currentAnime) return;
+    const episodes = state.currentAnime.episodes || [];
+    const currentEp = episodes[state.currentEpisodeIndex] || {};
+    const animeId = String(state.currentAnime.id);
+    const animeTitle = state.currentAnime.title?.english || state.currentAnime.title?.romaji || 'Anime';
+    const poster = state.currentAnime.coverImage?.extraLarge || state.currentAnime.coverImage?.large || state.currentAnime.bannerImage || '';
+    const episodeNum = currentEp.number || state.currentEpisodeIndex + 1;
+    const episodeId = currentEp.id || '';
+    const progressSeconds = Math.round(currentTime || 0);
+    const durationSeconds = Math.round(duration || 1420);
+
+    saveLocalWatchProgress({
+      animeId,
+      animeTitle,
+      poster,
+      episodeNum,
+      episodeId,
+      progressSeconds,
+      durationSeconds
+    });
+
+    if (state.auth && state.auth.token) {
+      syncProgressToBackend(progressSeconds, durationSeconds);
+    }
+  }
+
+  window.recordWatchProgress = recordWatchProgress;
+
   // Continue Watching Rail Loading
   async function loadContinueWatching() {
     let history = [];
@@ -1168,42 +1291,59 @@ document.addEventListener('DOMContentLoaded', () => {
           headers: { 'Authorization': `Bearer ${state.auth.token}` }
         });
         const json = await res.json();
-        if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+        if (json.success && Array.isArray(json.data)) {
           history = json.data;
           state.userHistory = history;
         }
       } catch (err) {
         console.warn('[History] Fetch failed:', err);
       }
-    }
+    } else {
+      // Guest mode: load from structured omcli_local_history
+      try {
+        const local = JSON.parse(localStorage.getItem('omcli_local_history') || '[]');
+        if (Array.isArray(local) && local.length > 0) {
+          history = local;
+        }
+      } catch {}
 
-    // Fallback: if cloud history is empty or guest mode, populate from local progress keys
-    if (!history.length) {
-      const localProgressKeys = Object.keys(localStorage).filter(k => k.startsWith('ani_progress_'));
-      if (localProgressKeys.length) {
-        history = localProgressKeys.map(k => {
-          try {
-            const data = JSON.parse(localStorage.getItem(k));
-            const epId = k.replace('ani_progress_', '');
-            return {
-              anime_id: data.animeId || epId.split('-')[0] || epId,
-              anime_title: data.title || 'Continue Episode',
-              poster_image: data.poster || '',
-              episode_num: data.episode || 1,
-              progress_seconds: data.time || 0,
-              duration_seconds: data.duration || 1420
-            };
-          } catch {
-            return null;
-          }
-        }).filter(Boolean);
+      // Legacy fallback: check old ani_progress_ keys if omcli_local_history was empty
+      if (!history.length) {
+        const legacyKeys = Object.keys(localStorage).filter(k => k.startsWith('ani_progress_'));
+        if (legacyKeys.length) {
+          history = legacyKeys.map(k => {
+            try {
+              const data = JSON.parse(localStorage.getItem(k));
+              const idPart = k.replace('ani_progress_', '');
+              return {
+                anime_id: data.animeId || idPart,
+                anime_title: data.title || 'Continue Watching',
+                poster: data.poster || '',
+                episode_num: data.episode || 1,
+                progress_seconds: data.time || 0,
+                duration_seconds: data.duration || 1420,
+                updated_at: data.updatedAt || 0
+              };
+            } catch { return null; }
+          }).filter(Boolean);
+        }
       }
     }
 
-    if (history.length > 0) {
+    // Deduplicate by anime_id (keep most recent) and filter invalid
+    const seen = new Set();
+    const deduplicated = [];
+    for (const item of history) {
+      const aid = String(item.anime_id || item.animeId || '');
+      if (!aid || aid === 'undefined' || aid === 'null' || seen.has(aid)) continue;
+      seen.add(aid);
+      deduplicated.push(item);
+    }
+
+    if (deduplicated.length > 0) {
       continueSection.classList.remove('hidden');
-      if (flyoutHistoryCount) flyoutHistoryCount.textContent = history.length;
-      renderContinueWatchingRail(history);
+      if (flyoutHistoryCount) flyoutHistoryCount.textContent = deduplicated.length;
+      renderContinueWatchingRail(deduplicated);
     } else {
       continueSection.classList.add('hidden');
       continueGrid.innerHTML = '';
@@ -1213,25 +1353,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function renderContinueWatchingRail(items) {
     continueGrid.innerHTML = items.slice(0, 6).map(item => {
-      const progressPercent = item.duration_seconds > 0 
-        ? Math.min(100, Math.round((item.progress_seconds / item.duration_seconds) * 100))
+      const duration = Number(item.duration_seconds) || 1420;
+      const progress = Math.round(Number(item.progress_seconds) || 0);
+      const isFinished = duration > 60 && progress >= (duration - 25);
+      const progressPercent = duration > 0 
+        ? Math.min(100, Math.round((progress / duration) * 100))
         : 0;
 
+      const resumeTime = isFinished ? 0 : progress;
+      const resumeEp = isFinished ? (Number(item.episode_num) + 1) : Number(item.episode_num);
+      const safeTitle = escapeQuotes(item.anime_title || 'Anime');
+      const posterSrc = item.poster || item.poster_image || '/assets/hero_bg.jpg';
+      const cleanAnimeId = String(item.anime_id);
+
       return `
-        <div class="relative group bg-surface-container-low border border-white/[0.08] hover:border-primary/50 rounded-2xl overflow-hidden shadow-lg transition-all cursor-pointer flex flex-col" onclick="window.location.hash='watch?anime=${item.anime_id}&ep=${item.episode_num}&t=${item.progress_seconds || 0}'">
+        <div id="continue-card-${cleanAnimeId}" class="continue-card relative group bg-surface-container-low border border-white/[0.08] hover:border-primary/50 rounded-2xl overflow-hidden shadow-lg transition-all duration-300 flex flex-col cursor-pointer" onclick="window.navigateToWatch('${cleanAnimeId}', ${resumeEp}, ${resumeTime})">
           <div class="relative aspect-video w-full bg-surface-container-high overflow-hidden">
-            <img src="${item.poster || 'https://via.placeholder.com/300x170'}" alt="${item.anime_title}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300">
+            <img src="${posterSrc}" alt="${safeTitle}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" onerror="this.onerror=null; this.src='/assets/hero_bg.jpg'">
             <div class="absolute inset-0 bg-gradient-to-t from-surface-container-lowest via-transparent to-transparent"></div>
             
             <!-- Quick Remove Button -->
-            <button class="btn-remove-continue absolute top-2 right-2 z-20 w-7 h-7 rounded-full bg-black/75 hover:bg-red-600 text-gray-300 hover:text-white backdrop-blur-md border border-white/20 flex items-center justify-center opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition-all duration-200 shadow-lg hover:scale-110 active:scale-90 cursor-pointer" title="Remove from Continue Watching" onclick="event.stopPropagation(); window.removeHistoryItem('${item.anime_id}');">
-              <span class="material-symbols-outlined text-[15px]">close</span>
+            <button class="btn-remove-continue absolute top-2 right-2 z-20 w-7 h-7 rounded-full bg-black/75 hover:bg-red-600 text-gray-300 hover:text-white backdrop-blur-md border border-white/20 flex items-center justify-center opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition-all duration-200 shadow-lg hover:scale-110 active:scale-90 cursor-pointer" title="Remove from Continue Watching" onclick="window.removeHistoryItem('${cleanAnimeId}', event);">
+              <span class="material-symbols-outlined text-[15px] pointer-events-none">close</span>
             </button>
 
-            <div class="absolute bottom-2 left-2 right-2">
+            <div class="absolute bottom-2 left-2 right-2 flex items-center justify-between">
               <span class="px-2 py-0.5 rounded bg-primary-container text-white font-mono text-[10px] font-bold shadow-sm">
                 EP ${item.episode_num}
               </span>
+              ${isFinished ? '<span class="px-2 py-0.5 rounded bg-emerald-500/80 text-white font-mono text-[9px] font-bold shadow-sm">FINISHED</span>' : ''}
             </div>
             <!-- Play overlay -->
             <div class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-black/40 backdrop-blur-[2px] transition-opacity pointer-events-none">
@@ -1241,14 +1391,16 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
           </div>
           <div class="p-3 flex flex-col gap-1.5 flex-1 justify-between">
-            <h3 class="text-xs font-bold text-white line-clamp-1 group-hover:text-primary transition-colors">${item.anime_title}</h3>
+            <h3 class="text-xs font-bold text-white line-clamp-1 group-hover:text-primary transition-colors">${safeTitle}</h3>
             <!-- Progress Bar -->
             <div class="w-full bg-surface-container-high h-1.5 rounded-full overflow-hidden">
-              <div class="bg-primary-container h-full rounded-full" style="width: ${progressPercent}%;"></div>
+              <div class="bg-primary-container h-full rounded-full transition-all duration-300" style="width: ${progressPercent}%;"></div>
             </div>
             <div class="flex items-center justify-between text-[10px] font-mono text-gray-400">
               <span>${progressPercent}% Complete</span>
-              <span class="text-secondary font-bold">Resume</span>
+              <span class="text-secondary font-bold flex items-center gap-0.5">
+                <span class="material-symbols-outlined text-[12px]">play_arrow</span>${isFinished ? 'Next Ep' : 'Resume'}
+              </span>
             </div>
           </div>
         </div>
@@ -1850,6 +2002,19 @@ document.addEventListener('DOMContentLoaded', () => {
           resumeTime = Number(histMatch.progress_seconds);
         }
       }
+      if (!resumeTime) {
+        try {
+          const localProg = JSON.parse(localStorage.getItem(`ani_progress_${animeId}`));
+          if (localProg && Number(localProg.episode) === Number(episodeNum) && Number(localProg.time) > 0) {
+            resumeTime = Number(localProg.time);
+          }
+        } catch {}
+      }
+
+      // If resumeTime is in the last 25 seconds of the episode, reset to 0 to avoid immediate auto-next/freeze
+      if (resumeTime > 0 && currentEp.duration && resumeTime >= (currentEp.duration - 25)) {
+        resumeTime = 0;
+      }
 
       const posterUrl = anime.bannerImage || anime.coverImage?.extraLarge || '';
       state.player.loadStream(currentEp.id, resolvedMode, posterUrl, resumeTime).then(() => {
@@ -1998,6 +2163,21 @@ document.addEventListener('DOMContentLoaded', () => {
       const nextEp = state.currentAnime.episodes[nextIdx];
       const epNum = nextEp ? (nextEp.number || nextIdx + 1) : nextIdx + 1;
       showToast(`Auto-playing Episode ${epNum}...`, 'info');
+
+      // Update watch progress to new episode at 0s
+      saveLocalWatchProgress({
+        animeId: state.currentAnime.id,
+        animeTitle: state.currentAnime.title?.english || state.currentAnime.title?.romaji || 'Anime',
+        poster: state.currentAnime.coverImage?.extraLarge || state.currentAnime.coverImage?.large || state.currentAnime.bannerImage || '',
+        episodeNum: epNum,
+        episodeId: nextEp?.id || '',
+        progressSeconds: 0,
+        durationSeconds: 1420
+      });
+      if (state.auth && state.auth.token) {
+        syncProgressToBackend(0, 1420);
+      }
+
       window.playEpisodeAtIndex(nextIdx);
     } else {
       showToast('You have reached the latest episode!', 'info');
@@ -2139,6 +2319,31 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!state.auth.token || !state.currentAnime) return;
     const episodes = state.currentAnime.episodes || [];
     const currentEp = episodes[state.currentEpisodeIndex] || {};
+    const animeId = String(state.currentAnime.id);
+    const animeTitle = state.currentAnime.title?.english || state.currentAnime.title?.romaji || 'Anime';
+    const poster = state.currentAnime.coverImage?.extraLarge || state.currentAnime.coverImage?.large || state.currentAnime.bannerImage || '';
+    const episodeNum = currentEp.number || state.currentEpisodeIndex + 1;
+    const episodeId = currentEp.id || '';
+
+    // Optimistically update state.userHistory in memory
+    if (state.userHistory) {
+      const existingIdx = state.userHistory.findIndex(h => String(h.anime_id) === animeId);
+      const updatedItem = {
+        anime_id: animeId,
+        anime_title: animeTitle,
+        poster,
+        episode_num: episodeNum,
+        episode_id: episodeId,
+        progress_seconds: progressSeconds,
+        duration_seconds: durationSeconds,
+        updated_at: Date.now()
+      };
+      if (existingIdx >= 0) {
+        state.userHistory[existingIdx] = updatedItem;
+      } else {
+        state.userHistory.unshift(updatedItem);
+      }
+    }
 
     try {
       await fetch('/api/user/history', {
@@ -2148,11 +2353,11 @@ document.addEventListener('DOMContentLoaded', () => {
           'Authorization': `Bearer ${state.auth.token}`
         },
         body: JSON.stringify({
-          animeId: state.currentAnime.id,
-          animeTitle: state.currentAnime.title?.english || state.currentAnime.title?.romaji || 'Anime',
-          poster: state.currentAnime.coverImage?.extraLarge || state.currentAnime.coverImage?.large || '',
-          episodeNum: currentEp.number || state.currentEpisodeIndex + 1,
-          episodeId: currentEp.id || '',
+          animeId,
+          animeTitle,
+          poster,
+          episodeNum,
+          episodeId,
           progressSeconds,
           durationSeconds
         })
@@ -2392,29 +2597,75 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  window.removeHistoryItem = async function(animeId) {
-    if (!state.auth.token) {
-      for (let i = localStorage.length - 1; i >= 0; i--) {
-        const key = localStorage.key(i);
-        if (key && (key.includes(`_${animeId}_`) || key.endsWith(`_${animeId}`) || key.startsWith(`ani_progress_${animeId}`))) {
-          localStorage.removeItem(key);
-        }
-      }
-      showToast('Removed from Continue Watching', 'info');
-      loadContinueWatching();
-      return;
+  window.removeHistoryItem = async function(animeId, e) {
+    if (e) {
+      try {
+        e.preventDefault();
+        e.stopPropagation();
+      } catch (_) {}
     }
 
+    const cleanId = String(animeId);
+
+    // 1. Instant optimistic DOM removal with smooth animation
+    const cardEl = document.getElementById(`continue-card-${cleanId}`);
+    if (cardEl) {
+      cardEl.style.transition = 'all 0.25s ease-out';
+      cardEl.style.opacity = '0';
+      cardEl.style.transform = 'scale(0.9)';
+      setTimeout(() => {
+        cardEl.remove();
+        if (continueGrid.querySelectorAll('.continue-card').length === 0) {
+          continueSection.classList.add('hidden');
+        }
+      }, 250);
+    }
+
+    // 2. Remove from structured omcli_local_history
     try {
-      await fetch(`/api/user/history/${animeId}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${state.auth.token}` }
-      });
-      showToast('Removed from Continue Watching', 'info');
-      state.userHistory = (state.userHistory || []).filter(h => String(h.anime_id) !== String(animeId));
-      loadAccountHistory();
-      loadContinueWatching();
+      let localHist = JSON.parse(localStorage.getItem('omcli_local_history') || '[]');
+      if (Array.isArray(localHist)) {
+        localHist = localHist.filter(h => String(h.anime_id) !== cleanId);
+        localStorage.setItem('omcli_local_history', JSON.stringify(localHist));
+      }
     } catch {}
+
+    // 3. Remove all matching individual progress keys from localStorage
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+      if (key === `ani_progress_${cleanId}` || key.startsWith(`ani_progress_${cleanId}_`)) {
+        localStorage.removeItem(key);
+      } else if (key.startsWith('ani_progress_')) {
+        try {
+          const val = JSON.parse(localStorage.getItem(key));
+          if (val && String(val.animeId) === cleanId) {
+            localStorage.removeItem(key);
+          }
+        } catch {}
+      }
+    }
+
+    // 4. Update memory state
+    state.userHistory = (state.userHistory || []).filter(h => String(h.anime_id) !== cleanId);
+    if (flyoutHistoryCount) {
+      flyoutHistoryCount.textContent = Math.max(0, parseInt(flyoutHistoryCount.textContent || 0) - 1);
+    }
+
+    // 5. If authenticated, sync deletion to cloud database
+    if (state.auth && state.auth.token) {
+      try {
+        await fetch(`/api/user/history/${cleanId}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${state.auth.token}` }
+        });
+      } catch (err) {
+        console.warn('[History] Backend deletion failed:', err);
+      }
+    }
+
+    showToast('Removed from Continue Watching', 'info');
+    loadAccountHistory();
   };
 
   // Rail Header Clear All
@@ -2424,14 +2675,10 @@ document.addEventListener('DOMContentLoaded', () => {
       e.preventDefault();
       if (!confirm('Clear all items from Continue Watching?')) return;
 
-      if (state.auth.token) {
-        try {
-          await fetch('/api/user/history', {
-            method: 'DELETE',
-            headers: { 'Authorization': `Bearer ${state.auth.token}` }
-          });
-        } catch {}
-      }
+      continueSection.classList.add('hidden');
+      continueGrid.innerHTML = '';
+
+      localStorage.removeItem('omcli_local_history');
 
       for (let i = localStorage.length - 1; i >= 0; i--) {
         const key = localStorage.key(i);
@@ -2441,8 +2688,18 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       state.userHistory = [];
+      if (flyoutHistoryCount) flyoutHistoryCount.textContent = '0';
+
+      if (state.auth && state.auth.token) {
+        try {
+          await fetch('/api/user/history', {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${state.auth.token}` }
+          });
+        } catch {}
+      }
+
       showToast('Continue Watching cleared', 'info');
-      loadContinueWatching();
       loadAccountHistory();
     });
   }

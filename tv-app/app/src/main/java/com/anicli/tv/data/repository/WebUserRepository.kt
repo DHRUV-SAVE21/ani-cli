@@ -356,9 +356,9 @@ class WebUserRepository @Inject constructor(
                     )
                 }
 
-                // Cache in local Room database
-                for (entity in cloudEntities) {
-                    watchProgressDao.insertProgress(entity)
+                // Cache in local Room database in a single atomic batch transaction
+                if (cloudEntities.isNotEmpty()) {
+                    watchProgressDao.insertProgressList(cloudEntities)
                 }
                 return@withContext cloudEntities
             }
@@ -441,9 +441,9 @@ class WebUserRepository @Inject constructor(
                     )
                 }
 
-                // Cache in local Room database
-                for (fav in cloudFavorites) {
-                    favoriteDao.insertFavorite(fav)
+                // Cache in local Room database in a single atomic batch transaction
+                if (cloudFavorites.isNotEmpty()) {
+                    favoriteDao.insertFavoriteList(cloudFavorites)
                 }
                 return@withContext cloudFavorites
             }

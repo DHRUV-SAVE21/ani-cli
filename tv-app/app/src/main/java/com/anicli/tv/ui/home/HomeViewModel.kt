@@ -57,20 +57,12 @@ class HomeViewModel @Inject constructor(
                 feedResult.onSuccess { baseRows ->
                     val finalRows = mutableListOf<MediaRow>()
                     
-                    // Filter out corrupt legacy "Unknown Anime" placeholders
+                    // Filter out corrupt legacy placeholders without mutating database inside observer
                     val validProgress = progressList.filter { 
-                        it.mediaTitle != "Unknown Anime" && !it.posterUrl.contains("wp.youtube-anime.com") 
-                    }
-
-                    val corruptProgress = progressList.filter { 
-                        it.mediaTitle == "Unknown Anime" || it.posterUrl.contains("wp.youtube-anime.com") 
-                    }
-                    if (corruptProgress.isNotEmpty()) {
-                        viewModelScope.launch {
-                            for (corrupt in corruptProgress) {
-                                watchProgressDao.deleteProgress(corrupt.mediaId)
-                            }
-                        }
+                        it.mediaTitle.isNotBlank() && 
+                        it.mediaTitle != "Unknown Anime" && 
+                        it.mediaTitle != "Anime Stream" &&
+                        !it.posterUrl.contains("wp.youtube-anime.com") 
                     }
                     
                     // 1. Continue Watching Row (with progress bar ratio)

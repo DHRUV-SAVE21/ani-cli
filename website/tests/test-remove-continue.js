@@ -3,7 +3,7 @@
 
 const { chromium } = require('playwright');
 
-const BASE_URL = 'https://om-cli-anime.omspradippatil.workers.dev';
+const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:3000';
 const CHROME_PATH = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 
 async function main() {
