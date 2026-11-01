@@ -16,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -412,7 +413,7 @@ fun DetailsScreen(
                         modifier = Modifier.padding(horizontal = 40.dp),
                         contentPadding = PaddingValues(horizontal = 8.dp)
                     ) {
-                        items(activeEpisodes) { episode ->
+                        items(activeEpisodes, key = { it.id }) { episode ->
                             val isWatched = state.watchProgress?.episodeId == episode.id
                             EpisodeCard(
                                 episode = episode,
@@ -467,6 +468,18 @@ fun EpisodeCard(
             .padding(6.dp)
             .aspectRatio(16f / 10f)
             .onFocusChanged { isFocused = it.isFocused }
+            .onKeyEvent { event ->
+                if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN &&
+                    (event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER ||
+                     event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ENTER ||
+                     event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_NUMPAD_ENTER)
+                ) {
+                    onClick()
+                    true
+                } else {
+                    false
+                }
+            }
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             AsyncImage(

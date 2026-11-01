@@ -110,6 +110,22 @@ router.get('/search', async (req, res) => {
   }
 });
 
+function isGenericTitle(t) {
+  if (!t || typeof t !== 'string') return true;
+  const s = t.trim().toLowerCase();
+  return (
+    s.length < 2 ||
+    s === 'anime' ||
+    s === 'anime details' ||
+    s === 'continue watching' ||
+    s === 'unknown' ||
+    s === 'unknown anime' ||
+    s === 'undefined' ||
+    s === 'null' ||
+    s.startsWith('anime #')
+  );
+}
+
 /**
  * GET /api/anime/:id
  * Fetches AniList anime info and resolves its streamable episode list
@@ -125,38 +141,44 @@ router.get('/anime/:id', async (req, res) => {
       details.title.english,
       details.title.romaji,
       details.title.userPreferred
-    ].filter(Boolean);
+    ].filter(t => t && !isGenericTitle(t));
 
-    const titleParam = req.query.title;
+    const rawTitleParam = req.query.title;
+    const titleParam = (rawTitleParam && !isGenericTitle(rawTitleParam)) ? rawTitleParam : null;
     const candidateTitles = new Set();
     if (titleParam) {
       candidateTitles.add(titleParam);
       candidateTitles.add(titleParam.replace(/[:\-]/g, ' ').replace(/\s+/g, ' ').trim());
       const prefix = titleParam.split(/[:\-]/)[0].trim();
-      if (prefix.length >= 3) candidateTitles.add(prefix);
+      if (prefix.length >= 3 && !isGenericTitle(prefix)) candidateTitles.add(prefix);
+      const noSeason = titleParam.replace(/\b(Season \d+|Part \d+|\b\d+(?:st|nd|rd|th) Season\b)\b/gi, '').trim();
+      if (noSeason.length >= 3 && !isGenericTitle(noSeason)) candidateTitles.add(noSeason);
     }
     if (baseTitles.length > 0) {
       for (const t of baseTitles) {
+        if (isGenericTitle(t)) continue;
         candidateTitles.add(t);
         candidateTitles.add(t.replace(/[:\-]/g, ' ').replace(/\s+/g, ' ').trim());
         const prefix = t.split(/[:\-]/)[0].trim();
-        if (prefix.length >= 3) candidateTitles.add(prefix);
+        if (prefix.length >= 3 && !isGenericTitle(prefix)) candidateTitles.add(prefix);
         const noSeason = t.replace(/\b(Season \d+|Part \d+|\b\d+(?:st|nd|rd|th) Season\b)\b/gi, '').trim();
-        if (noSeason.length >= 3) candidateTitles.add(noSeason);
+        if (noSeason.length >= 3 && !isGenericTitle(noSeason)) candidateTitles.add(noSeason);
       }
     } else if (!titleParam && isNaN(Number(id))) {
       const derived = id.replace(/-\d+$/, '').replace(/-/g, ' ').trim();
-      if (derived.length >= 2) {
+      if (derived.length >= 2 && !isGenericTitle(derived)) {
         candidateTitles.add(derived);
         const noSeason = derived.replace(/\b(Season \d+|Part \d+|\b\d+(?:st|nd|rd|th) Season\b)\b/gi, '').trim();
-        if (noSeason.length >= 2) candidateTitles.add(noSeason);
+        if (noSeason.length >= 2 && !isGenericTitle(noSeason)) candidateTitles.add(noSeason);
       }
     }
 
     let episodes = [];
     let hiAnimeMatch = null;
 
+    // Only search HiAnime if candidate titles exist and are non-generic
     for (const title of candidateTitles) {
+      if (isGenericTitle(title)) continue;
       const searchRes = await hianime.search(title);
       if (searchRes.length > 0) {
         hiAnimeMatch = searchRes[0];
@@ -187,7 +209,7 @@ router.get('/anime/:id', async (req, res) => {
  */
 router.get('/episodes', async (req, res) => {
   const query = req.query.query || req.query.q;
-  if (!query) return res.status(400).json({ success: false, error: 'Query parameter required' });
+  if (!query || isGenericTitle(query)) return res.status(400).json({ success: false, error: 'Valid query parameter required' });
   try {
     const searchRes = await hianime.search(query);
     let episodes = [];

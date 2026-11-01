@@ -108,9 +108,10 @@ class WebApiMediaProvider @Inject constructor(
             val response = webAnimeService.getAnimeDetails(mediaId, title = fallbackTitle)
             val detailData = response.data ?: return@withContext Result.failure(Exception("Anime not found"))
 
-            val title = detailData.title?.preferredTitle()?.takeIf { it != "Unknown Anime" }
-                ?: fallbackTitle
-                ?: "Anime Details"
+            val title = detailData.title?.preferredTitle()?.takeIf { it.isNotBlank() && it != "Unknown Anime" && it != "Anime Details" && it != "Anime" }
+                ?: fallbackTitle?.takeIf { it.isNotBlank() && it != "Anime Details" && it != "Anime" }
+                ?: detailData.hiAnimeMatch?.title?.takeIf { it.isNotBlank() && it != "Anime Details" && it != "Anime" }
+                ?: ("Anime #" + mediaId)
             val posterUrl = detailData.coverImage?.bestImageUrl()?.takeIf { it.isNotBlank() }
                 ?: detailData.poster?.takeIf { it.isNotBlank() }
                 ?: detailData.image?.takeIf { it.isNotBlank() }
@@ -125,7 +126,7 @@ class WebApiMediaProvider @Inject constructor(
                 ?: detailData.episodes?.takeIf { it.isNotEmpty() }
                 ?: emptyList()
             if (rawEpisodes.isEmpty()) {
-                val queryTitle = if (title != "Anime Details") title else (fallbackTitle ?: mediaId)
+                val queryTitle = if (!title.startsWith("Anime #") && title != "Anime Details" && title != "Anime") title else (fallbackTitle ?: mediaId)
                 try {
                     val epResponse = webAnimeService.getEpisodesByQuery(queryTitle)
                     rawEpisodes = epResponse.data ?: emptyList()
@@ -172,17 +173,57 @@ class WebApiMediaProvider @Inject constructor(
             // Resolve streamEpisodeId from episodeId format
             // Can be: "mediaId|streamEpId|epNum" OR "mediaId|epNum" OR "streamEpId"
             var realStreamEpId = episodeId
+            var mediaId = ""
+            var targetEpNum = 1
+
             if (episodeId.contains("|")) {
                 val parts = episodeId.split("|")
+                mediaId = parts.getOrNull(0) ?: ""
                 if (parts.size >= 3) {
                     realStreamEpId = parts[1]
+                    targetEpNum = parts[2].toIntOrNull() ?: 1
                 } else if (parts.size == 2) {
-                    val mediaId = parts[0]
-                    val epNum = parts[1].toIntOrNull() ?: 1
-                    val detailsRes = webAnimeService.getAnimeDetails(mediaId)
-                    val matchedEp = detailsRes.data?.streamEpisodes?.find { it.number == epNum }
-                    realStreamEpId = matchedEp?.id ?: parts[1]
+                    targetEpNum = parts[1].toIntOrNull() ?: 1
+                    realStreamEpId = "" // parts[1] is an episode number, NOT a stream ID!
                 }
+            }
+
+            // If realStreamEpId is empty or a raw 1/2-digit episode number, resolve real stream ID from media details
+            val isLikelyValidStreamId = realStreamEpId.isNotBlank() &&
+                (!realStreamEpId.all { it.isDigit() } || (realStreamEpId.toIntOrNull() ?: 0) > 100)
+
+            if (!isLikelyValidStreamId && mediaId.isNotBlank()) {
+                try {
+                    val fallbackTitle = if (!mediaId.all { it.isDigit() }) {
+                        mediaId.replace(Regex("-\\d+$"), "").replace("-", " ")
+                    } else null
+
+                    val detailsRes = webAnimeService.getAnimeDetails(mediaId, title = fallbackTitle)
+                    val candidateEps = detailsRes.data?.streamEpisodes?.takeIf { it.isNotEmpty() }
+                        ?: detailsRes.data?.episodes?.takeIf { it.isNotEmpty() }
+                    val matchedEp = candidateEps?.find { it.number == targetEpNum }
+                    if (matchedEp != null && matchedEp.id.isNotBlank()) {
+                        realStreamEpId = matchedEp.id
+                    }
+                } catch (_: Exception) {}
+
+                // Fallback to title query if still not resolved
+                if (realStreamEpId.isBlank() || (realStreamEpId.all { it.isDigit() } && (realStreamEpId.toIntOrNull() ?: 0) <= 100)) {
+                    try {
+                        val queryTitle = mediaId.replace(Regex("-\\d+$"), "").replace("-", " ")
+                        val epResponse = webAnimeService.getEpisodesByQuery(queryTitle)
+                        val matched = epResponse.data?.find { it.number == targetEpNum }
+                        if (matched != null && matched.id.isNotBlank()) {
+                            realStreamEpId = matched.id
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+
+            // STRICT SAFEGUARD: Never pass a raw episode number (<= 100) to /api/stream/{id}
+            // Doing so would stream a completely random anime on the backend!
+            if (realStreamEpId.isBlank() || (realStreamEpId.all { it.isDigit() } && (realStreamEpId.toIntOrNull() ?: 0) <= 100)) {
+                return@withContext Result.failure(Exception("Stream ID not found for Episode $targetEpNum of $mediaId"))
             }
 
             var streamRes = webAnimeService.getStream(realStreamEpId, mode)

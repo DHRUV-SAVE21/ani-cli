@@ -57,29 +57,50 @@ class HomeViewModel @Inject constructor(
                 feedResult.onSuccess { baseRows ->
                     val finalRows = mutableListOf<MediaRow>()
                     
-                    // Filter out corrupt legacy placeholders without mutating database inside observer
-                    val validProgress = progressList.filter { 
-                        it.mediaTitle.isNotBlank() && 
-                        it.mediaTitle != "Unknown Anime" && 
-                        it.mediaTitle != "Anime Stream" &&
-                        !it.posterUrl.contains("wp.youtube-anime.com") 
-                    }
-                    
-                    // 1. Continue Watching Row (with progress bar ratio)
-                    if (validProgress.isNotEmpty()) {
-                        val continueItems = validProgress.map { 
-                            val progressRatio = if (it.totalDurationMs > 0) {
-                                it.progressMs.toFloat() / it.totalDurationMs.toFloat()
-                            } else null
-                            MediaItem(
-                                id = it.mediaId, 
-                                title = it.mediaTitle, 
-                                posterUrl = it.posterUrl,
-                                backdropUrl = it.posterUrl,
-                                progressPercent = progressRatio,
-                                episodeLabel = it.episodeTitle.ifBlank { "EP 1" }
-                            )
+                    // 1. Continue Watching Row (with progress bar ratio, auto-healing, and episodeId preservation)
+                    val continueItems = progressList.mapNotNull { prog ->
+                        if (prog.mediaId.isBlank() || prog.mediaId == "undefined") return@mapNotNull null
+
+                        var title = prog.mediaTitle.takeIf { 
+                            it.isNotBlank() && it != "Unknown Anime" && it != "Anime Stream" && it != "Anime" 
                         }
+                        var poster = prog.posterUrl.takeIf { 
+                            it.isNotBlank() && !it.contains("wp.youtube-anime.com") 
+                        }
+
+                        // Auto-heal title and poster from in-memory catalog rows if missing
+                        if (title == null || poster == null) {
+                            val matchedCatalog = baseRows.flatMap { it.items }.find { it.id == prog.mediaId }
+                            if (title == null && matchedCatalog != null) title = matchedCatalog.title
+                            if (poster == null && matchedCatalog != null) poster = matchedCatalog.backdropUrl ?: matchedCatalog.posterUrl
+                        }
+
+                        // Also check memory cache from PlayerViewModel
+                        if (title == null || poster == null) {
+                            val cached = com.anicli.tv.ui.player.PlayerViewModel.getDetailFromCache(prog.mediaId)
+                            if (title == null && cached != null) title = cached.title
+                            if (poster == null && cached != null) poster = cached.backdropUrl.takeIf { it.isNotBlank() } ?: cached.posterUrl
+                        }
+
+                        // Never show blank cards with missing title or poster
+                        if (title.isNullOrBlank() || poster.isNullOrBlank()) return@mapNotNull null
+
+                        val progressRatio = if (prog.totalDurationMs > 0) {
+                            (prog.progressMs.toFloat() / prog.totalDurationMs.toFloat()).coerceIn(0.01f, 1f)
+                        } else 0.5f
+
+                        MediaItem(
+                            id = prog.mediaId, 
+                            title = title, 
+                            posterUrl = poster,
+                            backdropUrl = poster,
+                            progressPercent = progressRatio,
+                            episodeLabel = prog.episodeTitle.ifBlank { "EP 1" },
+                            episodeId = prog.episodeId
+                        )
+                    }
+
+                    if (continueItems.isNotEmpty()) {
                         finalRows.add(MediaRow("Continue Watching", continueItems))
                     }
 

@@ -17,6 +17,8 @@ try {
   topRatedSeed = require('../data/top_rated_seed.json');
 } catch (_) {}
 
+let lastAniListError = null;
+
 async function fetchAniList(query, variables = {}) {
   try {
     const res = await fetch(ANILIST_URL, {
@@ -24,14 +26,18 @@ async function fetchAniList(query, variables = {}) {
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36'
+        'User-Agent': 'OmCLI-AnimeStream/2.0 (https://github.com/omspradippatil/ani-cli)'
       },
       body: JSON.stringify({ query, variables })
     });
-    if (!res.ok) throw new Error(`AniList HTTP ${res.status}`);
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      throw new Error(`AniList HTTP ${res.status}: ${errText.slice(0, 100)}`);
+    }
     const json = await res.json();
     return json.data;
   } catch (err) {
+    lastAniListError = err.message;
     console.error('AniList fetch error:', err.message);
     throw err;
   }
@@ -459,5 +465,6 @@ module.exports = {
   getTopRated,
   searchAnime,
   getAnimeDetails,
-  browseAnime
+  browseAnime,
+  getLastError: () => lastAniListError
 };

@@ -438,17 +438,61 @@ async function removeSession(token) {
   }
 }
 
+function isGenericTitle(t) {
+  if (!t || typeof t !== 'string') return true;
+  const s = t.trim().toLowerCase();
+  return (
+    s.length < 2 ||
+    s === 'anime' ||
+    s === 'anime details' ||
+    s === 'continue watching' ||
+    s === 'unknown' ||
+    s === 'unknown anime' ||
+    s === 'undefined' ||
+    s === 'null' ||
+    s.startsWith('anime #')
+  );
+}
+
 /**
  * Watch History
  */
 async function saveWatchHistory(userId, data) {
   const now = Date.now();
+  const aid = String(data.animeId || data.anime_id || '');
+  if (!aid || aid === 'undefined' || aid === 'null' || aid.includes('|')) return;
+
+  let title = (data.animeTitle || data.anime_title || '').trim();
+  let poster = (data.poster || data.poster_image || '').trim();
+
+  if (isGenericTitle(title) && !isNaN(Number(aid))) {
+    try {
+      const anilist = require('./anilist');
+      const details = await anilist.getAnimeDetails(aid);
+      if (details && (details.title?.english || details.title?.romaji)) {
+        title = details.title.english || details.title.romaji || details.title.userPreferred;
+        if (!poster) poster = details.coverImage?.large || details.coverImage?.extraLarge || '';
+      }
+    } catch (_) {}
+  }
+  if (!title || isGenericTitle(title)) {
+    title = 'Anime';
+  }
+
   const sql = `
     INSERT INTO watch_history (user_id, anime_id, anime_title, poster, episode_num, episode_id, progress_seconds, duration_seconds, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(user_id, anime_id) DO UPDATE SET
-      anime_title = excluded.anime_title,
-      poster = excluded.poster,
+      anime_title = CASE 
+        WHEN excluded.anime_title IS NOT NULL AND excluded.anime_title != '' AND lower(excluded.anime_title) NOT IN ('anime', 'anime details', 'continue watching', 'unknown', 'unknown anime', 'undefined', 'null')
+        THEN excluded.anime_title
+        ELSE watch_history.anime_title
+      END,
+      poster = CASE
+        WHEN excluded.poster IS NOT NULL AND excluded.poster != ''
+        THEN excluded.poster
+        ELSE watch_history.poster
+      END,
       episode_num = excluded.episode_num,
       episode_id = excluded.episode_id,
       progress_seconds = excluded.progress_seconds,
@@ -457,9 +501,9 @@ async function saveWatchHistory(userId, data) {
   `;
   const params = [
     Number(userId),
-    String(data.animeId),
-    data.animeTitle || 'Anime',
-    data.poster || '',
+    aid,
+    title,
+    poster,
     Number(data.episodeNum) || 1,
     String(data.episodeId || ''),
     Number(data.progressSeconds) || 0,

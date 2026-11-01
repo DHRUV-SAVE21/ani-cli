@@ -45,6 +45,7 @@ import kotlinx.coroutines.delay
 @Composable
 fun HomeScreen(
     onMediaClick: (String) -> Unit,
+    onPlayEpisode: ((String) -> Unit)? = null,
     onSearchClick: () -> Unit,
     onSettingsClick: () -> Unit,
     viewModel: HomeViewModel = hiltViewModel()
@@ -134,6 +135,7 @@ fun HomeScreen(
                         HistoryView(
                             rows = state.rows,
                             onMediaClick = onMediaClick,
+                            onPlayEpisode = onPlayEpisode,
                             onExploreClick = { selectedDrawerItem = "Home" },
                             onRemoveContinueWatching = { itemToRemoveFromContinueWatching = it }
                         )
@@ -166,6 +168,7 @@ fun HomeScreen(
                                 HomeRow(
                                     row = row,
                                     onMediaClick = onMediaClick,
+                                    onPlayEpisode = onPlayEpisode,
                                     onFocusItem = onFocusItem,
                                     onRemoveContinueWatching = onRemoveContinueWatching
                                 )
@@ -410,6 +413,7 @@ fun WatchlistView(
 fun HistoryView(
     rows: List<MediaRow>,
     onMediaClick: (String) -> Unit,
+    onPlayEpisode: ((String) -> Unit)? = null,
     onExploreClick: () -> Unit,
     onRemoveContinueWatching: ((MediaItem) -> Unit)? = null
 ) {
@@ -515,7 +519,13 @@ fun HistoryView(
                 items(items) { item ->
                     ContinueWatchingCard(
                         item = item,
-                        onClick = { onMediaClick(item.id) },
+                        onClick = {
+                            if (!item.episodeId.isNullOrBlank() && onPlayEpisode != null) {
+                                onPlayEpisode(item.episodeId)
+                            } else {
+                                onMediaClick(item.id)
+                            }
+                        },
                         onRemove = if (onRemoveContinueWatching != null) { { onRemoveContinueWatching(item) } } else null,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -1023,6 +1033,7 @@ fun HeroBanner(
 fun HomeRow(
     row: MediaRow,
     onMediaClick: (String) -> Unit,
+    onPlayEpisode: ((String) -> Unit)? = null,
     onFocusItem: (MediaItem) -> Unit,
     onRemoveContinueWatching: ((MediaItem) -> Unit)? = null
 ) {
@@ -1074,7 +1085,13 @@ fun HomeRow(
                 if (isContinueWatching) {
                     ContinueWatchingCard(
                         item = item,
-                        onClick = { onMediaClick(item.id) },
+                        onClick = {
+                            if (!item.episodeId.isNullOrBlank() && onPlayEpisode != null) {
+                                onPlayEpisode(item.episodeId)
+                            } else {
+                                onMediaClick(item.id)
+                            }
+                        },
                         onFocus = { onFocusItem(item) },
                         onRemove = if (onRemoveContinueWatching != null) { { onRemoveContinueWatching(item) } } else null
                     )

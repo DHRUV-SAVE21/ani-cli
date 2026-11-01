@@ -12,6 +12,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -366,6 +367,19 @@ fun PlayerScreen(
                                                     .then(
                                                         if (shouldRequestInitialFocus) Modifier.focusRequester(episodeDrawerInitialRequester) else Modifier
                                                     )
+                                                    .onKeyEvent { event ->
+                                                        if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN &&
+                                                            (event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER ||
+                                                             event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ENTER ||
+                                                             event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_NUMPAD_ENTER)
+                                                        ) {
+                                                            showEpisodeDrawer = false
+                                                            onNextEpisode(ep.id)
+                                                            true
+                                                        } else {
+                                                            false
+                                                        }
+                                                    }
                                             ) {
                                                 Row(
                                                     modifier = Modifier

@@ -338,16 +338,23 @@ class WebUserRepository @Inject constructor(
             val response = webAnimeService.getWatchHistory("Bearer $currentToken", limit = 50)
             if (response.success && response.data != null) {
                 val cloudEntities = response.data.mapNotNull { item ->
-                    val aId = item.animeId?.takeIf { it.isNotBlank() && it != "undefined" } ?: return@mapNotNull null
+                    val aId = item.animeId?.takeIf { it.isNotBlank() && it != "undefined" && !it.contains("|") } ?: return@mapNotNull null
                     val epNum = item.episodeNum?.toInt() ?: 1
                     val epId = item.episodeId?.takeIf { it.isNotBlank() } ?: "$aId|$epNum"
                     val durationMs = ((item.durationSeconds ?: 0f) * 1000L).toLong()
                     val progressMs = ((item.progressSeconds ?: 0f) * 1000L).toLong()
 
+                    val rawTitle = item.animeTitle?.trim()
+                    val safeTitle = if (rawTitle.isNullOrBlank() || rawTitle.equals("Anime Details", true) || rawTitle.equals("Anime", true) || rawTitle.equals("Continue Watching", true)) {
+                        "Anime #$aId"
+                    } else {
+                        rawTitle
+                    }
+
                     WatchProgressEntity(
                         mediaId = aId,
                         episodeId = epId,
-                        mediaTitle = item.animeTitle ?: "Anime",
+                        mediaTitle = safeTitle,
                         episodeTitle = "Episode $epNum",
                         posterUrl = item.poster ?: "",
                         progressMs = progressMs,
@@ -377,12 +384,19 @@ class WebUserRepository @Inject constructor(
         progressMs: Long,
         durationMs: Long
     ) = withContext(Dispatchers.IO) {
-        if (animeId.isBlank() || animeId == "undefined") return@withContext
+        if (animeId.isBlank() || animeId == "undefined" || animeId.contains("|")) return@withContext
+
+        val rawTitle = title.trim()
+        val safeTitle = if (rawTitle.isBlank() || rawTitle.equals("Anime Details", true) || rawTitle.equals("Anime", true) || rawTitle.equals("Continue Watching", true)) {
+            "Anime #$animeId"
+        } else {
+            rawTitle
+        }
 
         val entity = WatchProgressEntity(
             mediaId = animeId,
             episodeId = episodeId.takeIf { it.isNotBlank() } ?: "$animeId|${epNum.toInt()}",
-            mediaTitle = title,
+            mediaTitle = safeTitle,
             episodeTitle = "Episode ${epNum.toInt()}",
             posterUrl = poster,
             progressMs = progressMs,
@@ -400,7 +414,7 @@ class WebUserRepository @Inject constructor(
                     "Bearer $currentToken",
                     SaveHistoryRequest(
                         animeId = animeId,
-                        animeTitle = title,
+                        animeTitle = safeTitle,
                         poster = poster,
                         episodeNum = epNum,
                         episodeId = episodeId,

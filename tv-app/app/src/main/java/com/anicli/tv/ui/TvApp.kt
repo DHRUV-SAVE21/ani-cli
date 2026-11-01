@@ -36,6 +36,10 @@ fun TvApp() {
                     onMediaClick = { mediaId ->
                         navController.navigate("details/$mediaId")
                     },
+                    onPlayEpisode = { episodeId ->
+                        val encoded = try { java.net.URLEncoder.encode(episodeId, "UTF-8") } catch (_: Exception) { episodeId }
+                        navController.navigate("player/$encoded")
+                    },
                     onSearchClick = {
                         navController.navigate("search")
                     },
@@ -62,17 +66,20 @@ fun TvApp() {
                 DetailsScreen(
                     mediaId = mediaId,
                     onPlayClick = { episodeId ->
-                        navController.navigate("player/$episodeId")
+                        val encoded = try { java.net.URLEncoder.encode(episodeId, "UTF-8") } catch (_: Exception) { episodeId }
+                        navController.navigate("player/$encoded")
                     },
                     onBack = { navController.popBackStack() }
                 )
             }
             composable("player/{episodeId}") { backStackEntry ->
-                val episodeId = backStackEntry.arguments?.getString("episodeId") ?: return@composable
+                val rawEpId = backStackEntry.arguments?.getString("episodeId") ?: return@composable
+                val episodeId = try { java.net.URLDecoder.decode(rawEpId, "UTF-8") } catch (_: Exception) { rawEpId }
                 PlayerScreen(
                     episodeId = episodeId,
                     onNextEpisode = { nextEpId ->
-                        navController.navigate("player/$nextEpId") {
+                        val encodedNext = try { java.net.URLEncoder.encode(nextEpId, "UTF-8") } catch (_: Exception) { nextEpId }
+                        navController.navigate("player/$encodedNext") {
                             popUpTo("player/{episodeId}") { inclusive = true }
                             launchSingleTop = true
                         }

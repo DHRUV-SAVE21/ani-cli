@@ -18,6 +18,22 @@ function jsonResponse(data, status = 200) {
   });
 }
 
+function isGenericTitle(t) {
+  if (!t || typeof t !== 'string') return true;
+  const s = t.trim().toLowerCase();
+  return (
+    s.length < 2 ||
+    s === 'anime' ||
+    s === 'anime details' ||
+    s === 'continue watching' ||
+    s === 'unknown' ||
+    s === 'unknown anime' ||
+    s === 'undefined' ||
+    s === 'null' ||
+    s.startsWith('anime #')
+  );
+}
+
 function corsPreflight() {
   return new Response(null, {
     status: 204,
@@ -507,19 +523,48 @@ export default {
         if (!user) return jsonResponse({ success: false, error: 'Unauthorized' }, 401);
         const body = await request.json();
         const animeId = String(body.animeId || body.anime_id || '');
-        const animeTitle = body.animeTitle || body.anime_title || 'Anime';
-        const poster = body.poster || '';
+        if (!animeId || animeId === 'undefined' || animeId === 'null' || animeId.includes('|')) {
+          return jsonResponse({ success: false, error: 'Invalid animeId' }, 400);
+        }
+
+        let animeTitle = (body.animeTitle || body.anime_title || '').trim();
+        let poster = (body.poster || body.poster_image || '').trim();
         const episodeNum = Number(body.episodeNum || body.episode_num) || 1;
         const episodeId = String(body.episodeId || body.episode_id || '');
         const progressSeconds = Number(body.progressSeconds ?? body.progress_seconds) || 0;
         const durationSeconds = Number(body.durationSeconds ?? body.duration_seconds) || 0;
         const now = Date.now();
+
+        // If animeTitle is generic or missing, and we have an AniList numeric ID, resolve title & poster from AniList
+        if (isGenericTitle(animeTitle) && !isNaN(Number(animeId))) {
+          try {
+            const aniDetails = await anilist.getAnimeDetails(animeId);
+            if (aniDetails && (aniDetails.title?.english || aniDetails.title?.romaji)) {
+              animeTitle = aniDetails.title.english || aniDetails.title.romaji || aniDetails.title.userPreferred;
+              if (!poster) {
+                poster = aniDetails.coverImage?.large || aniDetails.coverImage?.extraLarge || aniDetails.bannerImage || '';
+              }
+            }
+          } catch (_) {}
+        }
+        if (!animeTitle || isGenericTitle(animeTitle)) {
+          animeTitle = 'Anime';
+        }
+
         await db.prepare(`
           INSERT INTO watch_history (user_id, anime_id, anime_title, poster, episode_num, episode_id, progress_seconds, duration_seconds, updated_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(user_id, anime_id) DO UPDATE SET
-            anime_title = excluded.anime_title,
-            poster = excluded.poster,
+            anime_title = CASE 
+              WHEN excluded.anime_title IS NOT NULL AND excluded.anime_title != '' AND lower(excluded.anime_title) NOT IN ('anime', 'anime details', 'continue watching', 'unknown', 'unknown anime', 'undefined', 'null')
+              THEN excluded.anime_title
+              ELSE watch_history.anime_title
+            END,
+            poster = CASE
+              WHEN excluded.poster IS NOT NULL AND excluded.poster != ''
+              THEN excluded.poster
+              ELSE watch_history.poster
+            END,
             episode_num = excluded.episode_num,
             episode_id = excluded.episode_id,
             progress_seconds = excluded.progress_seconds,
@@ -704,7 +749,7 @@ export default {
       // --- EPISODES SEARCH & LIST ---
       if (pathname === '/api/episodes') {
         const query = url.searchParams.get('query') || url.searchParams.get('q');
-        if (!query) return jsonResponse({ success: false, error: 'Query parameter required' }, 400);
+        if (!query || isGenericTitle(query)) return jsonResponse({ success: false, error: 'Valid query parameter required' }, 400);
         const searchRes = await hianime.search(query);
         let episodes = [];
         let hiAnimeMatch = null;
@@ -718,11 +763,17 @@ export default {
       // --- METADATA: ANIME DETAILS + EPISODES ---
       if (pathname.startsWith('/api/anime/')) {
         const animeId = pathname.replace('/api/anime/', '');
-        const titleParam = url.searchParams.get('title');
+        const rawTitleParam = url.searchParams.get('title');
+        const titleParam = (rawTitleParam && !isGenericTitle(rawTitleParam)) ? rawTitleParam : null;
         let details = null;
+        let anilistError = null;
         try {
           details = await anilist.getAnimeDetails(animeId);
+          if (!details) {
+            anilistError = anilist.getLastError ? anilist.getLastError() : 'No details returned from AniList';
+          }
         } catch (e) {
+          anilistError = e.message;
           console.warn('Worker AniList details fallback for', animeId, e.message);
         }
 
@@ -731,30 +782,34 @@ export default {
           candidateTitles.add(titleParam);
           candidateTitles.add(titleParam.replace(/[:\-]/g, ' ').replace(/\s+/g, ' ').trim());
           const prefix = titleParam.split(/[:\-]/)[0].trim();
-          if (prefix.length >= 3) candidateTitles.add(prefix);
+          if (prefix.length >= 3 && !isGenericTitle(prefix)) candidateTitles.add(prefix);
           const noSeason = titleParam.replace(/\b(Season \d+|Part \d+|\b\d+(?:st|nd|rd|th) Season\b)\b/gi, '').trim();
-          if (noSeason.length >= 3) candidateTitles.add(noSeason);
+          if (noSeason.length >= 3 && !isGenericTitle(noSeason)) candidateTitles.add(noSeason);
         }
         if (details?.title) {
-          [details.title.english, details.title.romaji, details.title.userPreferred].filter(Boolean).forEach(t => {
-            candidateTitles.add(t);
-            candidateTitles.add(t.replace(/[:\-]/g, ' ').replace(/\s+/g, ' ').trim());
-            const prefix = t.split(/[:\-]/)[0].trim();
-            if (prefix.length >= 3) candidateTitles.add(prefix);
-          });
+          [details.title.english, details.title.romaji, details.title.userPreferred]
+            .filter(t => t && !isGenericTitle(t))
+            .forEach(t => {
+              candidateTitles.add(t);
+              candidateTitles.add(t.replace(/[:\-]/g, ' ').replace(/\s+/g, ' ').trim());
+              const prefix = t.split(/[:\-]/)[0].trim();
+              if (prefix.length >= 3 && !isGenericTitle(prefix)) candidateTitles.add(prefix);
+            });
         } else if (!titleParam && isNaN(Number(animeId))) {
           const derived = animeId.replace(/-\d+$/, '').replace(/-/g, ' ').trim();
-          if (derived.length >= 2) {
+          if (derived.length >= 2 && !isGenericTitle(derived)) {
             candidateTitles.add(derived);
             const noSeason = derived.replace(/\b(Season \d+|Part \d+|\b\d+(?:st|nd|rd|th) Season\b)\b/gi, '').trim();
-            if (noSeason.length >= 2) candidateTitles.add(noSeason);
+            if (noSeason.length >= 2 && !isGenericTitle(noSeason)) candidateTitles.add(noSeason);
           }
         }
 
         let episodes = [];
         let hiAnimeMatch = null;
 
+        // Only search HiAnime if candidateTitles is non-empty and non-generic
         for (const title of candidateTitles) {
+          if (isGenericTitle(title)) continue;
           const searchRes = await hianime.search(title);
           if (searchRes.length > 0) {
             hiAnimeMatch = searchRes[0];
@@ -767,6 +822,7 @@ export default {
           success: true,
           data: {
             id: animeId,
+            anilistError,
             ...(details || {}),
             totalEpisodes: details?.episodes || episodes.length,
             episodes,

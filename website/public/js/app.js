@@ -49,6 +49,22 @@ document.addEventListener('DOMContentLoaded', () => {
     ]
   };
 
+  function isGenericTitle(t) {
+    if (!t || typeof t !== 'string') return true;
+    const s = t.trim().toLowerCase();
+    return (
+      s.length < 2 ||
+      s === 'anime' ||
+      s === 'anime details' ||
+      s === 'continue watching' ||
+      s === 'unknown' ||
+      s === 'unknown anime' ||
+      s === 'undefined' ||
+      s === 'null' ||
+      s.startsWith('anime #')
+    );
+  }
+
   // ============================================================================
   // DOM ELEMENT SELECTORS
   // ============================================================================
@@ -1256,7 +1272,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const episodes = state.currentAnime.episodes || [];
     const currentEp = episodes[state.currentEpisodeIndex] || {};
     const animeId = String(state.currentAnime.id);
-    const animeTitle = state.currentAnime.title?.english || state.currentAnime.title?.romaji || 'Anime';
+    if (!animeId || animeId === 'undefined' || animeId === 'null' || animeId.includes('|')) return;
+
+    let animeTitle = state.currentAnime.title?.english || state.currentAnime.title?.romaji || state.currentAnime.title?.userPreferred || '';
+    if (isGenericTitle(animeTitle)) {
+      const cached = (state.userHistory || []).find(h => String(h.anime_id) === animeId);
+      if (cached && !isGenericTitle(cached.anime_title)) {
+        animeTitle = cached.anime_title;
+      }
+    }
     const poster = state.currentAnime.coverImage?.extraLarge || state.currentAnime.coverImage?.large || state.currentAnime.bannerImage || '';
     const episodeNum = currentEp.number || state.currentEpisodeIndex + 1;
     const episodeId = currentEp.id || '';
@@ -1265,7 +1289,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     saveLocalWatchProgress({
       animeId,
-      animeTitle,
+      animeTitle: animeTitle || 'Anime',
       poster,
       episodeNum,
       episodeId,
@@ -1340,24 +1364,62 @@ document.addEventListener('DOMContentLoaded', () => {
     const deduplicated = [];
     for (const item of history) {
       const aid = String(item.anime_id || item.animeId || '');
-      if (!aid || aid === 'undefined' || aid === 'null' || seen.has(aid)) continue;
+      if (!aid || aid === 'undefined' || aid === 'null' || aid.includes('|') || seen.has(aid)) continue;
       seen.add(aid);
       deduplicated.push(item);
     }
 
+    const countBadge = document.getElementById('continue-count-badge');
     if (deduplicated.length > 0) {
       continueSection.classList.remove('hidden');
       if (flyoutHistoryCount) flyoutHistoryCount.textContent = deduplicated.length;
+      if (countBadge) countBadge.textContent = `${deduplicated.length} IN PROGRESS`;
       renderContinueWatchingRail(deduplicated);
+
+      // Background healing for items with generic titles or missing posters
+      const itemsToHeal = deduplicated.filter(it => isGenericTitle(it.anime_title) || !it.poster);
+      if (itemsToHeal.length > 0 && window.AniListClient) {
+        Promise.all(itemsToHeal.map(async (it) => {
+          try {
+            const d = await window.AniListClient.getAnimeDetails(it.anime_id);
+            if (d && (d.title?.english || d.title?.romaji)) {
+              const healedTitle = d.title.english || d.title.romaji || d.title.userPreferred;
+              const healedPoster = d.coverImage?.large || d.coverImage?.extraLarge || d.bannerImage || '';
+              it.anime_title = healedTitle;
+              if (!it.poster) it.poster = healedPoster;
+              if (state.auth && state.auth.token) {
+                fetch('/api/user/history', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.auth.token}` },
+                  body: JSON.stringify({
+                    animeId: String(it.anime_id),
+                    animeTitle: healedTitle,
+                    poster: it.poster,
+                    episodeNum: it.episode_num || 1,
+                    episodeId: it.episode_id || '',
+                    progressSeconds: it.progress_seconds || 0,
+                    durationSeconds: it.duration_seconds || 1420
+                  })
+                }).catch(() => {});
+              }
+            }
+          } catch (_) {}
+        })).then(() => {
+          if (currentReqId === continueWatchingRequestId && deduplicated.length > 0) {
+            renderContinueWatchingRail(deduplicated);
+          }
+        });
+      }
     } else {
       continueSection.classList.add('hidden');
       continueGrid.innerHTML = '';
       if (flyoutHistoryCount) flyoutHistoryCount.textContent = '0';
+      if (countBadge) countBadge.textContent = '0 IN PROGRESS';
     }
   }
 
   function renderContinueWatchingRail(items) {
-    continueGrid.innerHTML = items.slice(0, 6).map(item => {
+    continueGrid.innerHTML = items.slice(0, 15).map(item => {
       const duration = Number(item.duration_seconds) || 1420;
       const progress = Math.round(Number(item.progress_seconds) || 0);
       const isFinished = duration > 60 && progress >= (duration - 25);
@@ -1370,47 +1432,78 @@ document.addEventListener('DOMContentLoaded', () => {
       const safeTitle = escapeQuotes(item.anime_title || 'Anime');
       const posterSrc = item.poster || item.poster_image || '/assets/hero_bg.jpg';
       const cleanAnimeId = String(item.anime_id);
+      const remainingSec = Math.max(0, duration - progress);
+      const remMinutes = Math.ceil(remainingSec / 60);
+      const remLabel = isFinished ? 'Completed' : `${remMinutes}m left`;
 
       return `
-        <div id="continue-card-${cleanAnimeId}" class="continue-card relative group bg-surface-container-low border border-white/[0.08] hover:border-primary/50 rounded-2xl overflow-hidden shadow-lg transition-all duration-300 flex flex-col cursor-pointer" onclick="window.navigateToWatch('${cleanAnimeId}', ${resumeEp}, ${resumeTime})">
+        <div id="continue-card-${cleanAnimeId}" class="continue-card group relative w-[280px] sm:w-[320px] shrink-0 snap-start bg-surface-container-low/95 backdrop-blur-xl border border-white/[0.08] hover:border-primary/60 rounded-2xl overflow-hidden shadow-[0_8px_30px_rgba(0,0,0,0.5)] hover:shadow-[0_16px_40px_rgba(255,79,115,0.25)] transition-all duration-300 flex flex-col cursor-pointer select-none" onclick="window.navigateToWatch('${cleanAnimeId}', ${resumeEp}, ${resumeTime})">
           <div class="relative aspect-video w-full bg-surface-container-high overflow-hidden">
-            <img src="${posterSrc}" alt="${safeTitle}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" onerror="this.onerror=null; this.src='/assets/hero_bg.jpg'">
-            <div class="absolute inset-0 bg-gradient-to-t from-surface-container-lowest via-transparent to-transparent"></div>
+            <img src="${posterSrc}" alt="${safeTitle}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 ease-out" onerror="this.onerror=null; this.src='/assets/hero_bg.jpg'">
+            <div class="absolute inset-0 bg-gradient-to-t from-[#0c0e14] via-[#0c0e14]/40 to-transparent"></div>
             
             <!-- Quick Remove Button -->
-            <button class="btn-remove-continue absolute top-2 right-2 z-20 w-7 h-7 rounded-full bg-black/80 hover:bg-red-600 text-gray-200 hover:text-white backdrop-blur-md border border-white/20 flex items-center justify-center opacity-80 hover:opacity-100 transition-all duration-200 shadow-lg hover:scale-110 active:scale-90 cursor-pointer" title="Remove from Continue Watching" onclick="window.removeHistoryItem('${cleanAnimeId}', event);">
+            <button class="btn-remove-continue absolute top-2 right-2 z-20 w-7 h-7 rounded-full bg-black/70 hover:bg-rose-600 text-gray-300 hover:text-white backdrop-blur-md border border-white/20 flex items-center justify-center opacity-80 group-hover:opacity-100 hover:scale-110 active:scale-95 transition-all duration-200 shadow-md cursor-pointer" title="Remove from Continue Watching" onclick="window.removeHistoryItem('${cleanAnimeId}', event);">
               <span class="material-symbols-outlined text-[15px] pointer-events-none">close</span>
             </button>
 
-            <div class="absolute bottom-2 left-2 right-2 flex items-center justify-between">
-              <span class="px-2 py-0.5 rounded bg-primary-container text-white font-mono text-[10px] font-bold shadow-sm">
+            <!-- Top-Left Episode Badge -->
+            <div class="absolute top-2 left-2 flex items-center gap-1.5 z-10">
+              <span class="bg-primary-container px-2.5 py-0.5 rounded-lg text-white font-mono text-[10px] sm:text-[11px] font-bold shadow-[0_2px_10px_rgba(255,79,115,0.4)] flex items-center gap-1 border border-white/20">
                 EP ${item.episode_num}
               </span>
-              ${isFinished ? '<span class="px-2 py-0.5 rounded bg-emerald-500/80 text-white font-mono text-[9px] font-bold shadow-sm">FINISHED</span>' : ''}
             </div>
-            <!-- Play overlay -->
-            <div class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-black/40 backdrop-blur-[2px] transition-opacity pointer-events-none">
-              <span class="w-10 h-10 rounded-full bg-primary-container text-white flex items-center justify-center shadow-lg">
-                <span class="material-symbols-outlined text-[24px]">play_arrow</span>
-              </span>
+
+            <!-- Bottom Thumbnail Overlays -->
+            <div class="absolute bottom-2 left-2 right-2 flex items-center justify-between z-10 pointer-events-none">
+              <div class="px-2 py-0.5 rounded bg-black/75 backdrop-blur-md text-gray-300 text-[10px] font-semibold border border-white/10 flex items-center gap-1">
+                <i class="material-symbols-outlined text-[11px] text-gray-400 not-italic">schedule</i>
+                ${remLabel}
+              </div>
+              ${isFinished ? '<span class="px-2 py-0.5 rounded bg-emerald-500/90 text-white font-mono text-[9px] font-bold shadow-[0_0_10px_rgba(16,185,129,0.5)] border border-emerald-400/40">FINISHED</span>' : ''}
+            </div>
+
+            <!-- Glowing Center Play Overlay -->
+            <div class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-black/40 backdrop-blur-[2px] transition-all duration-300 pointer-events-none">
+              <div class="w-12 h-12 rounded-full bg-primary/90 text-white flex items-center justify-center shadow-[0_0_25px_rgba(255,79,115,0.8)] border border-white/40 scale-75 group-hover:scale-100 transition-transform duration-300">
+                <span class="material-symbols-outlined text-[26px]">play_arrow</span>
+              </div>
             </div>
           </div>
-          <div class="p-3 flex flex-col gap-1.5 flex-1 justify-between">
-            <h3 class="text-xs font-bold text-white line-clamp-1 group-hover:text-primary transition-colors">${safeTitle}</h3>
-            <!-- Progress Bar -->
-            <div class="w-full bg-surface-container-high h-1.5 rounded-full overflow-hidden">
-              <div class="bg-primary-container h-full rounded-full transition-all duration-300" style="width: ${progressPercent}%;"></div>
+
+          <div class="p-3.5 flex flex-col gap-2 flex-1 justify-between bg-surface-container-low/50">
+            <h3 class="text-sm font-bold text-white line-clamp-1 group-hover:text-primary transition-colors tracking-tight font-display">${safeTitle}</h3>
+            
+            <!-- High-Contrast Progress Bar -->
+            <div class="w-full bg-surface-container-high h-1.5 rounded-full overflow-hidden shadow-inner relative">
+              <div class="bg-primary-container h-full rounded-full transition-all duration-500 shadow-[0_0_10px_rgba(255,79,115,0.5)]" style="width: ${progressPercent}%;"></div>
             </div>
-            <div class="flex items-center justify-between text-[10px] font-mono text-gray-400">
+
+            <div class="flex items-center justify-between text-[11px] font-mono text-gray-400">
               <span>${progressPercent}% Complete</span>
-              <span class="text-secondary font-bold flex items-center gap-0.5">
-                <span class="material-symbols-outlined text-[12px]">play_arrow</span>${isFinished ? 'Next Ep' : 'Resume'}
+              <span class="text-secondary font-bold flex items-center gap-1 group-hover:text-primary transition-colors">
+                <span class="material-symbols-outlined text-[13px]">play_circle</span>
+                ${isFinished ? 'Next Ep' : 'Resume'}
               </span>
             </div>
           </div>
         </div>
       `;
     }).join('');
+  }
+
+  // Setup Carousel Glide Buttons
+  const btnContinueScrollLeft = document.getElementById('btn-continue-scroll-left');
+  const btnContinueScrollRight = document.getElementById('btn-continue-scroll-right');
+  if (btnContinueScrollLeft && continueGrid) {
+    btnContinueScrollLeft.addEventListener('click', () => {
+      continueGrid.scrollBy({ left: -340, behavior: 'smooth' });
+    });
+  }
+  if (btnContinueScrollRight && continueGrid) {
+    btnContinueScrollRight.addEventListener('click', () => {
+      continueGrid.scrollBy({ left: 340, behavior: 'smooth' });
+    });
   }
 
   // Generic Card Renderer
@@ -1920,7 +2013,8 @@ document.addEventListener('DOMContentLoaded', () => {
                      (state.spotlightList || []).find(a => String(a.id) === String(animeId)) ||
                      (state.userWatchlist || []).find(a => String(a.anime_id) === String(animeId)) ||
                      (state.userHistory || []).find(a => String(a.anime_id) === String(animeId));
-      const titleHint = cached?.title?.english || cached?.title?.romaji || cached?.title?.userPreferred || cached?.anime_title || '';
+      const rawTitle = cached?.title?.english || cached?.title?.romaji || cached?.title?.userPreferred || cached?.anime_title || '';
+      const titleHint = (!isGenericTitle(rawTitle)) ? rawTitle : '';
 
       const res = await fetch(`/api/anime/${animeId}${titleHint ? `?title=${encodeURIComponent(titleHint)}` : ''}`).catch(() => null);
       if (res && res.ok) {
@@ -1931,10 +2025,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       }
 
+      // Check if metadata actually has a valid title
+      const hasValidTitle = anime && anime.title && (anime.title.english || anime.title.romaji || anime.title.userPreferred);
+
       // Fallback: direct browser AniList query + backend HiAnime episode extraction
-      if ((!anime || !episodes.length) && window.AniListClient) {
+      if ((!hasValidTitle || !episodes.length) && window.AniListClient) {
         const directDetails = await window.AniListClient.getAnimeDetails(animeId).catch(() => null);
-        if (directDetails) {
+        if (directDetails && (directDetails.title?.english || directDetails.title?.romaji)) {
           const directTitle = directDetails.title?.english || directDetails.title?.romaji || directDetails.title?.userPreferred || '';
           const epRes = await fetch(`/api/episodes?query=${encodeURIComponent(directTitle)}`).catch(() => null);
           let extractedEps = [];
@@ -1954,11 +2051,29 @@ document.addEventListener('DOMContentLoaded', () => {
             hiAnimeMatch: match
           };
           episodes = extractedEps;
+
+          // Silent self-heal: sync accurate title and poster to backend history!
+          if (state.auth && state.auth.token) {
+            fetch('/api/user/history', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.auth.token}` },
+              body: JSON.stringify({
+                animeId: String(animeId),
+                animeTitle: directTitle,
+                poster: directDetails.coverImage?.extraLarge || directDetails.coverImage?.large || directDetails.bannerImage || '',
+                episodeNum: Number(episodeNum) || 1,
+                progressSeconds: Number(startTime) || 0,
+                durationSeconds: 1420
+              })
+            }).catch(() => {});
+          }
         }
       }
 
-      if (!anime) {
-        throw new Error('Failed to fetch anime metadata');
+      if (!anime || !anime.title) {
+        showToast('Anime metadata could not be loaded', 'error');
+        navigateTo('home');
+        return;
       }
 
       state.currentAnime = anime;
@@ -2622,7 +2737,10 @@ document.addEventListener('DOMContentLoaded', () => {
       cardEl.style.transform = 'scale(0.9)';
       setTimeout(() => {
         cardEl.remove();
-        if (continueGrid.querySelectorAll('.continue-card').length === 0) {
+        const remaining = continueGrid.querySelectorAll('.continue-card').length;
+        const countBadge = document.getElementById('continue-count-badge');
+        if (countBadge) countBadge.textContent = `${remaining} IN PROGRESS`;
+        if (remaining === 0) {
           continueSection.classList.add('hidden');
         }
       }, 250);
@@ -2685,6 +2803,8 @@ document.addEventListener('DOMContentLoaded', () => {
       continueWatchingRequestId++;
       continueSection.classList.add('hidden');
       continueGrid.innerHTML = '';
+      const countBadge = document.getElementById('continue-count-badge');
+      if (countBadge) countBadge.textContent = '0 IN PROGRESS';
 
       localStorage.removeItem('omcli_local_history');
 
