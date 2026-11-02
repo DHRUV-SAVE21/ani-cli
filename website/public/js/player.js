@@ -34,6 +34,8 @@ class AnimePlayer {
     this.levels = [];
     this.currentQualityLabel = 'Auto';
     this._episodeEndedTriggered = false;
+    this._keyListener = null;
+    this.initKeyboardShortcuts();
   }
 
   /**
@@ -133,6 +135,7 @@ class AnimePlayer {
             this.art.video.play().catch(() => {});
           }
         }
+        this.updatePlayPauseUI(true);
 
         return streamData;
       } catch (err) {
@@ -329,6 +332,7 @@ class AnimePlayer {
         playsInline: true,
         autoPlayback: true,
         airplay: true,
+        hotkey: false,
         theme: '#ff4f73',
         lang: 'en',
         moreVideoAttr: {
@@ -351,13 +355,32 @@ class AnimePlayer {
           onVttLoad: sanitizeVtt,
         },
         controls: [
-          // Play button is index 10 by default
+          // Rewind 5s button (Left controls)
+          {
+            name: 'skip-back-5s-btn',
+            position: 'left',
+            index: 11,
+            html: '<button class="art-icon-btn art-btn-skip5" title="Rewind 5s (← / J)"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8zm-1.1 11h-.85v-3.26l-1.01.31v-.67l1.73-.57h.13V16zm2.97-.04c-.3.04-.6.04-.88 0-.44-.06-.77-.24-1-.53-.22-.29-.33-.67-.33-1.14 0-.48.11-.86.34-1.15.23-.29.57-.46 1.01-.52.29-.04.59-.04.88 0 .44.06.77.23 1 .52.22.29.34.67.34 1.15 0 .47-.11.85-.33 1.14-.23.29-.57.47-1.03.53zm-.44-2.81c-.24 0-.42.09-.54.27-.12.18-.18.44-.18.78 0 .34.06.6.18.78.12.18.3.27.54.27.24 0 .42-.09.54-.27.12-.18.18-.44.18-.78 0-.34-.06-.6-.18-.78-.12-.18-.3-.27-.54-.27z"/></svg></button>',
+            click: function () {
+              self.seekRelative(-5);
+            },
+          },
+          // Forward 5s button (Left controls)
+          {
+            name: 'skip-fwd-5s-btn',
+            position: 'left',
+            index: 12,
+            html: '<button class="art-icon-btn art-btn-skip5" title="Forward 5s (→ / L)"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 5V1l5 5-5 5V7c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6h2c0 4.42-3.58 8-8 8s-8-3.58-8-8 3.58-8 8-8zm-1.1 11h-.85v-3.26l-1.01.31v-.67l1.73-.57h.13V16zm2.97-.04c-.3.04-.6.04-.88 0-.44-.06-.77-.24-1-.53-.22-.29-.33-.67-.33-1.14 0-.48.11-.86.34-1.15.23-.29.57-.46 1.01-.52.29-.04.59-.04.88 0 .44.06.77.23 1 .52.22.29.34.67.34 1.15 0 .47-.11.85-.33 1.14-.23.29-.57.47-1.03.53zm-.44-2.81c-.24 0-.42.09-.54.27-.12.18-.18.44-.18.78 0 .34.06.6.18.78.12.18.3.27.54.27.24 0 .42-.09.54-.27.12-.18.18-.44.18-.78 0-.34-.06-.6-.18-.78-.12-.18-.3-.27-.54-.27z"/></svg></button>',
+            click: function () {
+              self.seekRelative(5);
+            },
+          },
           // Previous Episode button (Left controls)
           {
             name: 'prev-ep-btn',
             position: 'left',
-            index: 12,
-            html: '<button class="art-icon-btn" title="Previous Episode"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="19 20 9 12 19 4 19 20"></polygon><line x1="5" y1="19" x2="5" y2="5" stroke="currentColor" stroke-width="2.5"></line></svg></button>',
+            index: 13,
+            html: '<button class="art-icon-btn" title="Previous Episode (P)"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="19 20 9 12 19 4 19 20"></polygon><line x1="5" y1="19" x2="5" y2="5" stroke="currentColor" stroke-width="2.5"></line></svg></button>',
             click: function () {
               if (typeof self.onPrevEpisode === 'function') {
                 self.onPrevEpisode();
@@ -369,7 +392,7 @@ class AnimePlayer {
             name: 'next-ep-btn',
             position: 'left',
             index: 14,
-            html: '<button class="art-icon-btn" title="Next Episode"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19" stroke="currentColor" stroke-width="2.5"></line></svg></button>',
+            html: '<button class="art-icon-btn" title="Next Episode (N)"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19" stroke="currentColor" stroke-width="2.5"></line></svg></button>',
             click: function () {
               if (typeof self.onNextEpisode === 'function') {
                 self.onNextEpisode();
@@ -381,11 +404,9 @@ class AnimePlayer {
             name: 'skip-intro-btn',
             position: 'left',
             index: 16,
-            html: '<button class="art-btn-skip" title="Skip Opening (+85s)">+85s</button>',
+            html: '<button class="art-btn-skip" title="Skip Opening (+85s / S)">+85s</button>',
             click: function () {
-              if (self.art) {
-                self.art.currentTime = Math.min(self.art.duration, self.art.currentTime + 85);
-              }
+              self.seekRelative(85);
             },
           },
           // Audio Mode SUB / DUB toggle button (Right controls)
@@ -479,6 +500,7 @@ class AnimePlayer {
           this.art.subtitle.show = this.captionsEnabled;
         }
         ensureAudioAudible();
+        self.updatePlayPauseUI();
         this.art.play().catch(() => {});
 
         // Add native video ended listener for ultimate reliability
@@ -496,12 +518,50 @@ class AnimePlayer {
             settingEl.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
           }
         } catch (e) {}
+
+        // Mobile touch double-tap seek & gestures
+        try {
+          const vLayer = self.art.template?.$video || self.art.template?.$player;
+          if (vLayer) {
+            let lastTap = 0;
+            vLayer.addEventListener('touchend', (e) => {
+              if (e.changedTouches.length !== 1) return;
+              const touch = e.changedTouches[0];
+              const rect = vLayer.getBoundingClientRect();
+              const x = touch.clientX - rect.left;
+              const width = rect.width;
+              const now = Date.now();
+              const diff = now - lastTap;
+              if (diff < 320 && diff > 50) {
+                lastTap = 0;
+                if (x < width * 0.38) {
+                  e.preventDefault();
+                  self.seekRelative(-5);
+                  self.showQuickSeekFeedback('left', '-5s');
+                } else if (x > width * 0.62) {
+                  e.preventDefault();
+                  self.seekRelative(5);
+                  self.showQuickSeekFeedback('right', '+5s');
+                }
+              } else {
+                lastTap = now;
+              }
+            }, { passive: false });
+          }
+        } catch (_) {}
       });
 
-      this.art.on('video:play', ensureAudioAudible);
+      this.art.on('video:play', () => {
+        ensureAudioAudible();
+        self.updatePlayPauseUI(true);
+      });
+      this.art.on('video:pause', () => {
+        self.updatePlayPauseUI(false);
+      });
       this.art.on('video:playing', () => {
         ensureAudioAudible();
         checkMuteState();
+        self.updatePlayPauseUI(true);
       });
       this.art.on('video:volumechange', checkMuteState);
 
@@ -693,7 +753,210 @@ class AnimePlayer {
   }
 
   /**
-   * Universal Mobile & Desktop Fullscreen with Automatic Orientation Rotation
+   * Toggles video playback (Play / Pause)
+   */
+  togglePlay() {
+    if (!this.art) return;
+    this.art.toggle();
+    setTimeout(() => {
+      this.updatePlayPauseUI(this.art?.playing);
+      if (this.art.notice) {
+        this.art.notice.show = this.art.playing ? 'Play' : 'Pause';
+      }
+    }, 60);
+  }
+
+  /**
+   * Relative seeking in seconds (+5, -5, +85)
+   */
+  seekRelative(seconds) {
+    if (!this.art) return;
+    this.lastSeekSeconds = seconds;
+    const duration = this.art.duration || 1420;
+    const current = (this._virtualTime !== undefined) ? this._virtualTime : (this.art.currentTime || 0);
+    const target = Math.max(0, Math.min(duration, current + seconds));
+    this._virtualTime = target;
+    try {
+      this.art.currentTime = target;
+    } catch (_) {}
+    if (this.art.notice) {
+      this.art.notice.show = seconds > 0 ? `+${seconds}s` : `${seconds}s`;
+    }
+  }
+
+  /**
+   * Floating ripple HUD for quick seek on mobile / double-tap
+   */
+  showQuickSeekFeedback(side, text) {
+    try {
+      const container = this.art?.template?.$player || document.querySelector('#artplayer-inner-stage');
+      if (!container) return;
+      const old = container.querySelector('.ani-seek-ripple');
+      if (old) old.remove();
+
+      const el = document.createElement('div');
+      el.className = `ani-seek-ripple ani-seek-${side}`;
+      const icon = side === 'left' ? 'replay_5' : 'forward_5';
+      el.innerHTML = `<span class="material-symbols-outlined text-[18px]">${icon}</span><span>${text}</span>`;
+      container.appendChild(el);
+
+      setTimeout(() => {
+        el.remove();
+      }, 520);
+    } catch (_) {}
+  }
+
+  /**
+   * Synchronizes external toolbar Play/Pause button
+   */
+  updatePlayPauseUI(isPlaying) {
+    const playing = (typeof isPlaying === 'boolean') ? isPlaying : (this.art?.playing || false);
+    const iconEl = document.getElementById('icon-play-pause-down');
+    const textEl = document.getElementById('text-play-pause-down');
+    const btnEl = document.getElementById('btn-play-pause-down');
+    if (iconEl) iconEl.textContent = playing ? 'pause' : 'play_arrow';
+    if (textEl) textEl.textContent = playing ? 'Pause' : 'Play';
+    if (btnEl) {
+      btnEl.title = playing ? 'Pause (Space / K)' : 'Play (Space / K)';
+    }
+  }
+
+  /**
+   * Universal Laptop / Desktop Keyboard Shortcuts
+   */
+  initKeyboardShortcuts() {
+    if (this._keyListener) return;
+
+    this._keyListener = (e) => {
+      // Ignore if user is currently typing in an input element
+      const target = e.target;
+      if (target) {
+        const tag = target.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable) {
+          return;
+        }
+      }
+
+      // Only handle if Watch Room is visible
+      const watchView = document.getElementById('watch-view');
+      if (watchView && watchView.classList.contains('hidden')) return;
+
+      if (!this.art) return;
+
+      const key = e.key;
+
+      // Fullscreen (F / f)
+      if (key === 'f' || key === 'F') {
+        e.preventDefault();
+        this.toggleFullscreen();
+        return;
+      }
+
+      // Play / Pause (Space / K / k)
+      if (key === ' ' || key === 'k' || key === 'K') {
+        e.preventDefault();
+        this.togglePlay();
+        return;
+      }
+
+      // Rewind 5s (ArrowLeft / J / j)
+      if (key === 'ArrowLeft' || key === 'j' || key === 'J') {
+        e.preventDefault();
+        this.seekRelative(-5);
+        this.showQuickSeekFeedback('left', '-5s');
+        return;
+      }
+
+      // Forward 5s (ArrowRight / L / l)
+      if (key === 'ArrowRight' || key === 'l' || key === 'L') {
+        e.preventDefault();
+        this.seekRelative(5);
+        this.showQuickSeekFeedback('right', '+5s');
+        return;
+      }
+
+      // Volume Up (+10%) (ArrowUp)
+      if (key === 'ArrowUp') {
+        e.preventDefault();
+        const v = Math.min(1, Math.round(((this.art.volume || 0) + 0.1) * 10) / 10);
+        this.art.volume = v;
+        if (this.art.notice) this.art.notice.show = `Volume: ${Math.round(v * 100)}% (↑)`;
+        return;
+      }
+
+      // Volume Down (-10%) (ArrowDown)
+      if (key === 'ArrowDown') {
+        e.preventDefault();
+        const v = Math.max(0, Math.round(((this.art.volume || 0) - 0.1) * 10) / 10);
+        this.art.volume = v;
+        if (this.art.notice) this.art.notice.show = `Volume: ${Math.round(v * 100)}% (↓)`;
+        return;
+      }
+
+      // Mute Toggle (M / m)
+      if (key === 'm' || key === 'M') {
+        e.preventDefault();
+        this.art.muted = !this.art.muted;
+        if (this.art.notice) this.art.notice.show = this.art.muted ? 'Muted (M)' : 'Unmuted (M)';
+        return;
+      }
+
+      // Captions Toggle (C / c)
+      if (key === 'c' || key === 'C') {
+        e.preventDefault();
+        this.toggleCaptions();
+        return;
+      }
+
+      // Skip Opening +85s (S / s)
+      if (key === 's' || key === 'S') {
+        e.preventDefault();
+        this.seekRelative(85);
+        return;
+      }
+
+      // Next Episode (N / n)
+      if (key === 'n' || key === 'N') {
+        e.preventDefault();
+        if (typeof this.onNextEpisode === 'function') {
+          if (this.art.notice) this.art.notice.show = 'Next Episode (N)';
+          this.onNextEpisode();
+        }
+        return;
+      }
+
+      // Previous Episode (P / p)
+      if (key === 'p' || key === 'P') {
+        e.preventDefault();
+        if (typeof this.onPrevEpisode === 'function') {
+          if (this.art.notice) this.art.notice.show = 'Previous Episode (P)';
+          this.onPrevEpisode();
+        }
+        return;
+      }
+
+      // Theater Mode (T / t)
+      if (key === 't' || key === 'T') {
+        e.preventDefault();
+        const btnTheater = document.getElementById('btn-theater-mode');
+        if (btnTheater) btnTheater.click();
+        return;
+      }
+
+      // Escape -> Exit Fullscreen
+      if (key === 'Escape') {
+        const isFull = this.art.fullscreen || this.art.fullscreenWeb || document.body.classList.contains('player-in-fullscreen');
+        if (isFull) {
+          this.exitFullscreen();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', this._keyListener);
+  }
+
+  /**
+   * Universal Mobile & Desktop Fullscreen
    */
   async toggleFullscreen() {
     if (!this.art) return false;
@@ -703,8 +966,7 @@ class AnimePlayer {
       this.art.fullscreenWeb ||
       document.fullscreenElement ||
       document.webkitFullscreenElement ||
-      document.body.classList.contains('player-in-fullscreen') ||
-      document.body.classList.contains('player-forced-landscape')
+      document.body.classList.contains('player-in-fullscreen')
     );
 
     if (isCurrentlyFull) {
@@ -718,33 +980,30 @@ class AnimePlayer {
 
   async enterFullscreen() {
     if (!this.art) return false;
-    const playerEl = this.art.template?.$player || this.art.element;
-    const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-
     document.body.classList.add('player-in-fullscreen');
 
-    const canNativeFs = !!(document.fullscreenEnabled || document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
+    const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
-    if (canNativeFs && !isIOS) {
+    if (!isIOS && (document.fullscreenEnabled || document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen)) {
       try {
-        if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-          if (playerEl && playerEl.requestFullscreen) {
-            await playerEl.requestFullscreen();
-          } else if (playerEl && playerEl.webkitRequestFullscreen) {
-            await playerEl.webkitRequestFullscreen();
-          } else {
-            this.art.fullscreen = true;
-          }
+        if (!this.art.fullscreen && !document.fullscreenElement && !document.webkitFullscreenElement) {
+          this.art.fullscreen = true;
         }
       } catch (err) {
-        console.warn('[Player] Native requestFullscreen failed, using web fullscreen fallback:', err);
+        console.warn('[Player] art.fullscreen failed, using fullscreenWeb fallback:', err);
         this.art.fullscreenWeb = true;
       }
     } else {
       this.art.fullscreenWeb = true;
     }
 
-    await this.applyOrientation(true);
+    // Try hardware orientation lock if available
+    if (screen.orientation && typeof screen.orientation.lock === 'function') {
+      try {
+        await screen.orientation.lock('landscape').catch(() => {});
+      } catch (_) {}
+    }
+
     this.updateFullscreenIcons(true);
     if (typeof this.onFullscreenChange === 'function') {
       this.onFullscreenChange(true);
@@ -759,17 +1018,16 @@ class AnimePlayer {
       if (this.art.fullscreen) this.art.fullscreen = false;
       if (this.art.fullscreenWeb) this.art.fullscreenWeb = false;
       if (document.fullscreenElement) {
-        await document.exitFullscreen();
+        await document.exitFullscreen().catch(() => {});
       } else if (document.webkitFullscreenElement) {
-        await document.webkitExitFullscreen();
+        await document.webkitExitFullscreen().catch(() => {});
       }
-    } catch (e) {}
+    } catch (_) {}
 
     document.body.classList.remove('player-in-fullscreen');
-    document.body.classList.remove('player-forced-landscape');
 
     if (screen.orientation && typeof screen.orientation.unlock === 'function') {
-      try { screen.orientation.unlock(); } catch (e) {}
+      try { screen.orientation.unlock(); } catch (_) {}
     }
 
     this.updateFullscreenIcons(false);
@@ -779,70 +1037,19 @@ class AnimePlayer {
     return false;
   }
 
-  /**
-   * Synchronizes orientation, body classes, and UI buttons when fullscreen changes
-   */
-  async handleFullscreenChange(isFull) {
+  handleFullscreenChange(isFull) {
     if (isFull) {
       document.body.classList.add('player-in-fullscreen');
-      await this.applyOrientation(true);
     } else {
       document.body.classList.remove('player-in-fullscreen');
-      document.body.classList.remove('player-forced-landscape');
       if (screen.orientation && typeof screen.orientation.unlock === 'function') {
-        try { screen.orientation.unlock(); } catch (e) {}
+        try { screen.orientation.unlock(); } catch (_) {}
       }
     }
 
     this.updateFullscreenIcons(isFull);
     if (typeof this.onFullscreenChange === 'function') {
       this.onFullscreenChange(isFull);
-    }
-  }
-
-  /**
-   * Attempts hardware landscape lock, with instant CSS rotation fallback for iOS & portrait devices
-   */
-  async applyOrientation(isFull) {
-    if (!isFull) {
-      document.body.classList.remove('player-forced-landscape');
-      if (screen.orientation && typeof screen.orientation.unlock === 'function') {
-        try { screen.orientation.unlock(); } catch (e) {}
-      }
-      return;
-    }
-
-    const isTouchOrMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || ('ontouchstart' in window && window.innerWidth < 1024);
-    let locked = false;
-
-    // 1. Attempt Screen Orientation API lock
-    if (screen.orientation && typeof screen.orientation.lock === 'function') {
-      // Allow DOM to settle into fullscreenElement
-      for (let i = 0; i < 4; i++) {
-        if (document.fullscreenElement || document.webkitFullscreenElement) break;
-        await new Promise(r => setTimeout(r, 40));
-      }
-      try {
-        await screen.orientation.lock('landscape');
-        locked = true;
-      } catch (e1) {
-        try {
-          await screen.orientation.lock('landscape-primary');
-          locked = true;
-        } catch (e2) {
-          locked = false;
-        }
-      }
-    }
-
-    // 2. Fallback: If hardware lock failed or unsupported (iOS Safari, Android orientation-locked), force CSS landscape rotation
-    if (!locked && isTouchOrMobile) {
-      const isPortrait = window.matchMedia('(orientation: portrait)').matches || window.innerHeight > window.innerWidth;
-      if (isPortrait) {
-        document.body.classList.add('player-forced-landscape');
-      } else {
-        document.body.classList.remove('player-forced-landscape');
-      }
     }
   }
 
@@ -853,7 +1060,7 @@ class AnimePlayer {
       fsBtn.innerHTML = isFull
         ? '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg>'
         : '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>';
-      fsBtn.setAttribute('title', isFull ? 'Exit Fullscreen' : 'Enter Fullscreen');
+      fsBtn.setAttribute('title', isFull ? 'Exit Fullscreen (F)' : 'Enter Fullscreen (F)');
     }
 
     // External Down Fullscreen button (#btn-fullscreen-down)

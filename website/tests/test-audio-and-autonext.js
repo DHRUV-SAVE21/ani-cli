@@ -176,7 +176,8 @@ async function runTests() {
     // Navigate to watch room WITHOUT &mode in hash
     console.log('  -> Navigating to #watch?anime=20&ep=1 without explicit mode...');
     await page.goto(`${BASE_URL}/#watch?anime=20&ep=1`, { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(3000);
+    await page.waitForSelector('.art-btn-mode', { timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(500);
 
     // Verify hash was updated with &mode=dub
     const currentHash = await page.evaluate(() => window.location.hash);
@@ -250,7 +251,7 @@ async function runTests() {
     const fullscreenBtn = await page.$('.art-btn-fs, button[title*="Fullscreen"], #btn-fullscreen-down');
     record('6.5 Fullscreen control visible', fullscreenBtn !== null);
 
-    const nextBtn = await page.$('button[title="Next Episode"]');
+    const nextBtn = await page.$('button[title*="Next Episode"]');
     record('6.6 Next episode control button visible', nextBtn !== null);
 
     // -----------------------------------------------------------------

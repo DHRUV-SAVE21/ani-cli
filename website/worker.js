@@ -30,7 +30,9 @@ function isGenericTitle(t) {
     s === 'unknown anime' ||
     s === 'undefined' ||
     s === 'null' ||
-    s.startsWith('anime #')
+    s === '[object object]' ||
+    s.startsWith('anime #') ||
+    s.startsWith('episode ')
   );
 }
 
@@ -515,21 +517,33 @@ export default {
         const user = await getAuthUser(request, db);
         if (!user) return jsonResponse({ success: false, error: 'Unauthorized' }, 401);
 
-        // Auto-purge any ghost corrupt records (generic title AND no poster)
+        // Auto-purge any corrupt ghost records (generic title or missing title or generic poster)
         await db.prepare(`
           DELETE FROM watch_history 
           WHERE user_id = ? 
-            AND (lower(anime_title) IN ('anime', 'anime details', 'continue watching', 'unknown', 'unknown anime', 'undefined', 'null') OR anime_title IS NULL OR trim(anime_title) = '')
-            AND (poster IS NULL OR poster = '' OR poster = '/assets/hero_bg.jpg')
+            AND (
+              lower(anime_title) IN ('anime', 'anime details', 'continue watching', 'unknown', 'unknown anime', 'undefined', 'null', '[object object]')
+              OR anime_title IS NULL 
+              OR trim(anime_title) = ''
+              OR lower(anime_title) LIKE 'anime #%'
+              OR poster = '/assets/hero_bg.jpg'
+              OR poster = 'undefined'
+              OR poster = 'null'
+            )
         `).bind(user.id).run().catch(() => {});
 
         const { results } = await db.prepare(`
           SELECT * FROM watch_history 
           WHERE user_id = ? 
-            AND NOT (
-              (lower(anime_title) IN ('anime', 'anime details', 'continue watching', 'unknown', 'unknown anime', 'undefined', 'null') OR anime_title IS NULL OR trim(anime_title) = '')
-              AND (poster IS NULL OR poster = '' OR poster = '/assets/hero_bg.jpg')
-            )
+            AND lower(anime_title) NOT IN ('anime', 'anime details', 'continue watching', 'unknown', 'unknown anime', 'undefined', 'null', '[object object]')
+            AND anime_title IS NOT NULL
+            AND trim(anime_title) != ''
+            AND lower(anime_title) NOT LIKE 'anime #%'
+            AND poster IS NOT NULL
+            AND poster != ''
+            AND poster != '/assets/hero_bg.jpg'
+            AND poster != 'undefined'
+            AND poster != 'null'
           ORDER BY updated_at DESC LIMIT 50
         `).bind(user.id).all();
 
@@ -559,20 +573,16 @@ export default {
             const aniDetails = await anilist.getAnimeDetails(animeId);
             if (aniDetails && (aniDetails.title?.english || aniDetails.title?.romaji)) {
               animeTitle = aniDetails.title.english || aniDetails.title.romaji || aniDetails.title.userPreferred;
-              if (!poster) {
+              if (!poster || poster === '/assets/hero_bg.jpg' || poster === 'undefined') {
                 poster = aniDetails.coverImage?.large || aniDetails.coverImage?.extraLarge || aniDetails.bannerImage || '';
               }
             }
           } catch (_) {}
         }
 
-        // STRICT GATE: Never save ghost records (generic title AND no poster)
-        if (isGenericTitle(animeTitle) && (!poster || poster === '/assets/hero_bg.jpg')) {
-          return jsonResponse({ success: false, error: 'Cannot save history without valid anime metadata' }, 400);
-        }
-
-        if (!animeTitle || isGenericTitle(animeTitle)) {
-          animeTitle = 'Anime';
+        // STRICT GATE: Never save ghost records with generic title or missing poster
+        if (isGenericTitle(animeTitle) || !poster || poster === '/assets/hero_bg.jpg' || poster === 'undefined' || poster === 'null') {
+          return jsonResponse({ success: false, error: 'Cannot save history without valid anime title and poster' }, 400);
         }
 
         await db.prepare(`

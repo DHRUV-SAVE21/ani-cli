@@ -450,7 +450,9 @@ function isGenericTitle(t) {
     s === 'unknown anime' ||
     s === 'undefined' ||
     s === 'null' ||
-    s.startsWith('anime #')
+    s === '[object object]' ||
+    s.startsWith('anime #') ||
+    s.startsWith('episode ')
   );
 }
 
@@ -471,17 +473,16 @@ async function saveWatchHistory(userId, data) {
       const details = await anilist.getAnimeDetails(aid);
       if (details && (details.title?.english || details.title?.romaji)) {
         title = details.title.english || details.title.romaji || details.title.userPreferred;
-        if (!poster) poster = details.coverImage?.large || details.coverImage?.extraLarge || '';
+        if (!poster || poster === '/assets/hero_bg.jpg' || poster === 'undefined') {
+          poster = details.coverImage?.large || details.coverImage?.extraLarge || '';
+        }
       }
     } catch (_) {}
   }
-  // STRICT GATE: Never save ghost records (generic title AND no poster)
-  if (isGenericTitle(title) && (!poster || poster === '/assets/hero_bg.jpg')) {
-    return;
-  }
 
-  if (!title || isGenericTitle(title)) {
-    title = 'Anime';
+  // STRICT GATE: Never save ghost records with generic title or missing poster
+  if (isGenericTitle(title) || !poster || poster === '/assets/hero_bg.jpg' || poster === 'undefined' || poster === 'null') {
+    return;
   }
 
   const sql = `
@@ -542,16 +543,28 @@ async function getWatchHistory(userId, limit = 50) {
   const purgeSql = `
     DELETE FROM watch_history 
     WHERE user_id = ? 
-      AND (lower(anime_title) IN ('anime', 'anime details', 'continue watching', 'unknown', 'unknown anime', 'undefined', 'null') OR anime_title IS NULL OR trim(anime_title) = '')
-      AND (poster IS NULL OR poster = '' OR poster = '/assets/hero_bg.jpg')
+      AND (
+        lower(anime_title) IN ('anime', 'anime details', 'continue watching', 'unknown', 'unknown anime', 'undefined', 'null', '[object object]')
+        OR anime_title IS NULL 
+        OR trim(anime_title) = ''
+        OR lower(anime_title) LIKE 'anime #%'
+        OR poster = '/assets/hero_bg.jpg'
+        OR poster = 'undefined'
+        OR poster = 'null'
+      )
   `;
   const sql = `
     SELECT * FROM watch_history 
     WHERE user_id = ? 
-      AND NOT (
-        (lower(anime_title) IN ('anime', 'anime details', 'continue watching', 'unknown', 'unknown anime', 'undefined', 'null') OR anime_title IS NULL OR trim(anime_title) = '')
-        AND (poster IS NULL OR poster = '' OR poster = '/assets/hero_bg.jpg')
-      )
+      AND lower(anime_title) NOT IN ('anime', 'anime details', 'continue watching', 'unknown', 'unknown anime', 'undefined', 'null', '[object object]')
+      AND anime_title IS NOT NULL
+      AND trim(anime_title) != ''
+      AND lower(anime_title) NOT LIKE 'anime #%'
+      AND poster IS NOT NULL
+      AND poster != ''
+      AND poster != '/assets/hero_bg.jpg'
+      AND poster != 'undefined'
+      AND poster != 'null'
     ORDER BY updated_at DESC LIMIT ?
   `;
   if (isCloudflareD1Api) {
@@ -566,7 +579,7 @@ async function getWatchHistory(userId, limit = 50) {
   const userHist = memoryStore.history.get(Number(userId));
   if (!userHist) return [];
   return Array.from(userHist.values())
-    .filter(item => !(isGenericTitle(item.anime_title) && (!item.poster || item.poster === '/assets/hero_bg.jpg')))
+    .filter(item => !(isGenericTitle(item.anime_title) || !item.poster || item.poster === '/assets/hero_bg.jpg' || item.poster === 'undefined'))
     .sort((a, b) => b.updated_at - a.updated_at).slice(0, limit);
 }
 

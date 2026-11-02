@@ -275,6 +275,30 @@ body {
   transform: scale(1.05) !important;
 }
 
+.art-video-player .art-btn-skip5 {
+  background: transparent !important;
+  color: #ffffff !important;
+  border-radius: 6px !important;
+  padding: 4px 6px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  transition: all 0.15s ease !important;
+  flex-shrink: 0 !important;
+  cursor: pointer !important;
+  border: none !important;
+}
+
+.art-video-player .art-btn-skip5:hover {
+  background: rgba(255, 255, 255, 0.15) !important;
+  color: #ff4f73 !important;
+  transform: scale(1.08) !important;
+}
+
+.art-video-player .art-btn-skip5 svg {
+  display: block;
+}
+
 .art-video-player .art-btn-mode {
   background: rgba(0, 227, 253, 0.2) !important;
   color: #00e3fd !important;
@@ -564,77 +588,125 @@ body {
   bottom: 16px !important;
 }
 
-/* Fullscreen Top Stacking & Safe Area Insets */
-.art-video-player.art-fullscreen,
-.art-video-player.art-fullscreen-web,
-.art-video-player.art-web-fullscreen {
-  z-index: 999999 !important;
-}
-
 /* ==========================================================================
-   MOBILE FULLSCREEN AUTO-ROTATE & LANDSCAPE ENFORCEMENT
+   MOBILE & DESKTOP FULLSCREEN PRECISION
    ========================================================================== */
 
-/* Universal Fallback: Forced Landscape Rotation for Mobile Fullscreen */
-@media (orientation: portrait) {
-  body.player-forced-landscape {
-    overflow: hidden !important;
-    position: fixed !important;
-    width: 100% !important;
-    height: 100% !important;
-    touch-action: none !important;
-  }
-
-  body.player-forced-landscape .art-video-player {
-    position: fixed !important;
-    top: 0 !important;
-    left: 0 !important;
-    width: 100dvh !important;
-    width: 100vh !important;
-    height: 100dvw !important;
-    height: 100vw !important;
-    transform-origin: top left !important;
-    transform: rotate(90deg) translateY(-100%) !important;
-    z-index: 9999999 !important;
-    max-width: none !important;
-    max-height: none !important;
-    border-radius: 0 !important;
-    margin: 0 !important;
-  }
-
-  body.player-forced-landscape .art-video-player .art-bottom {
-    padding-left: max(24px, env(safe-area-inset-top, 0px)) !important;
-    padding-right: max(24px, env(safe-area-inset-bottom, 0px)) !important;
-    padding-bottom: max(14px, env(safe-area-inset-left, 0px)) !important;
-    opacity: 1 !important;
-    visibility: visible !important;
-  }
+/* Fullscreen Master Stage: Full 100% Edge-to-Edge Coverage */
+body.player-in-fullscreen,
+body:has(.art-video-player.art-fullscreen),
+body:has(.art-video-player.art-fullscreen-web),
+body:has(.art-video-player.art-web-fullscreen) {
+  overflow: hidden !important;
+  width: 100% !important;
+  height: 100% !important;
 }
 
-/* Hide background headers, bottom nav, and toasts in fullscreen & forced landscape */
+body.player-in-fullscreen #watch-view,
+body:has(.art-video-player.art-fullscreen) #watch-view,
+body:has(.art-video-player.art-fullscreen-web) #watch-view {
+  padding: 0 !important;
+  margin: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  position: static !important;
+}
+
+.art-video-player.art-fullscreen,
+.art-video-player.art-fullscreen-web,
+.art-video-player.art-web-fullscreen,
+body.player-in-fullscreen .art-video-player {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 100vw !important;
+  width: 100dvw !important;
+  height: 100vh !important;
+  height: 100dvh !important;
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  z-index: 2147483647 !important;
+  background: #000000 !important;
+  transform: none !important;
+}
+
+/* Video inside fullscreen container */
+.art-video-player.art-fullscreen video,
+.art-video-player.art-fullscreen-web video,
+.art-video-player.art-web-fullscreen video,
+body.player-in-fullscreen .art-video-player video {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+}
+
+/* Hide background navigation, headers, and toasts in fullscreen */
 body.player-in-fullscreen #mobile-bottom-nav,
-body.player-forced-landscape #mobile-bottom-nav,
 body.player-in-fullscreen header,
-body.player-forced-landscape header,
 body.player-in-fullscreen #toast-container,
-body.player-forced-landscape #toast-container,
 body:has(.art-video-player.art-fullscreen) #mobile-bottom-nav,
-body:has(.art-video-player.art-web-fullscreen) #mobile-bottom-nav,
+body:has(.art-video-player.art-fullscreen) header,
+body:has(.art-video-player.art-fullscreen) #toast-container,
 body:has(.art-video-player.art-fullscreen-web) #mobile-bottom-nav,
-body:has(.player-forced-landscape) #mobile-bottom-nav {
+body:has(.art-video-player.art-fullscreen-web) header,
+body:has(.art-video-player.art-fullscreen-web) #toast-container {
   display: none !important;
 }
 
-/* Landscape Fullscreen Safe Area Margin (Dynamic Island / Notches) */
-@media (orientation: landscape) {
-  .art-video-player.art-fullscreen .art-bottom,
-  .art-video-player.art-web-fullscreen .art-bottom,
-  .art-video-player.art-fullscreen-web .art-bottom,
-  body.player-in-fullscreen .art-video-player .art-bottom {
-    padding-left: max(16px, env(safe-area-inset-left, 0px)) !important;
-    padding-right: max(16px, env(safe-area-inset-right, 0px)) !important;
-    padding-bottom: max(10px, env(safe-area-inset-bottom, 0px)) !important;
-  }
+/* Fullscreen Safe Area Insets for Phone Notches / Dynamic Island */
+.art-video-player.art-fullscreen .art-bottom,
+.art-video-player.art-fullscreen-web .art-bottom,
+.art-video-player.art-web-fullscreen .art-bottom,
+body.player-in-fullscreen .art-video-player .art-bottom {
+  padding-left: max(16px, env(safe-area-inset-left, 0px)) !important;
+  padding-right: max(16px, env(safe-area-inset-right, 0px)) !important;
+  padding-bottom: max(12px, env(safe-area-inset-bottom, 0px)) !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+}
+
+/* Quick Double-Tap Seek Feedback Animation for Mobile */
+.ani-seek-ripple {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(12, 14, 20, 0.9);
+  border: 1.5px solid rgba(255, 79, 115, 0.6);
+  color: #ffffff;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 700;
+  padding: 10px 18px;
+  border-radius: 9999px;
+  box-shadow: 0 4px 25px rgba(255, 79, 115, 0.45);
+  pointer-events: none;
+  animation: seekPop 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.ani-seek-ripple.ani-seek-left {
+  left: 12%;
+}
+
+.ani-seek-ripple.ani-seek-right {
+  right: 12%;
+}
+
+@keyframes seekPop {
+  0% { transform: translateY(-50%) scale(0.7); opacity: 0; }
+  35% { transform: translateY(-50%) scale(1.1); opacity: 1; }
+  70% { transform: translateY(-50%) scale(1); opacity: 1; }
+  100% { transform: translateY(-50%) scale(0.9); opacity: 0; }
 }
 
 /* Theater Mode Layout */
@@ -737,16 +809,33 @@ button:active,
   transition: transform 0.1s ease;
 }
 
-/* Controls Integrity & Stability: Show secondary controls ONLY in landscape or viewports >= 600px */
-.art-video-player .art-control-prev-ep-btn,
-.art-video-player .art-control-next-ep-btn,
-.art-video-player .art-control-skip-intro-btn,
-.art-video-player .art-control-audio-mode-btn,
-.art-video-player .art-controls-left [data-name="prev-ep-btn"],
-.art-video-player .art-controls-left [data-name="next-ep-btn"],
-.art-video-player .art-controls-left [data-name="skip-intro-btn"],
-.art-video-player .art-controls-right [data-name="audio-mode-btn"] {
-  display: none !important;
+/* Controls Integrity & Stability on Mobile Screens (< 600px) */
+@media (max-width: 599px) {
+  .art-video-player .art-control-prev-ep-btn,
+  .art-video-player .art-control-next-ep-btn,
+  .art-video-player .art-control-skip-intro-btn,
+  .art-video-player .art-control-audio-mode-btn,
+  .art-video-player .art-controls-left [data-name="prev-ep-btn"],
+  .art-video-player .art-controls-left [data-name="next-ep-btn"],
+  .art-video-player .art-controls-left [data-name="skip-intro-btn"],
+  .art-video-player .art-controls-right [data-name="audio-mode-btn"] {
+    display: none !important;
+  }
+
+  /* Always keep Play, Rewind 5s, Forward 5s, Time, CC, and Fullscreen visible on mobile */
+  .art-video-player .art-control-play,
+  .art-video-player .art-control-skip-back-5s-btn,
+  .art-video-player .art-control-skip-fwd-5s-btn,
+  .art-video-player .art-controls-left [data-name="skip-back-5s-btn"],
+  .art-video-player .art-controls-left [data-name="skip-fwd-5s-btn"],
+  .art-video-player .art-control-time,
+  .art-video-player .art-control-cc-btn,
+  .art-video-player .art-controls-right [data-name="cc-btn"],
+  .art-video-player .art-control-custom-fullscreen-btn,
+  .art-video-player .art-controls-right [data-name="custom-fullscreen-btn"],
+  .art-video-player .art-control-fullscreen {
+    display: inline-flex !important;
+  }
 }
 
 /* Enable secondary playback controls when there is sufficient horizontal width (>= 600px or landscape) */
@@ -758,25 +847,15 @@ button:active,
   .art-video-player .art-controls-left [data-name="prev-ep-btn"],
   .art-video-player .art-controls-left [data-name="next-ep-btn"],
   .art-video-player .art-controls-left [data-name="skip-intro-btn"],
-  .art-video-player .art-controls-right [data-name="audio-mode-btn"] {
+  .art-video-player .art-controls-right [data-name="audio-mode-btn"],
+  .art-video-player .art-control-skip-back-5s-btn,
+  .art-video-player .art-control-skip-fwd-5s-btn,
+  .art-video-player .art-controls-left [data-name="skip-back-5s-btn"],
+  .art-video-player .art-controls-left [data-name="skip-fwd-5s-btn"] {
     display: inline-flex !important;
     align-items: center !important;
     justify-content: center !important;
   }
-}
-
-/* Also enable secondary playback controls in forced landscape rotation mode */
-body.player-forced-landscape .art-video-player .art-control-prev-ep-btn,
-body.player-forced-landscape .art-video-player .art-control-next-ep-btn,
-body.player-forced-landscape .art-video-player .art-control-skip-intro-btn,
-body.player-forced-landscape .art-video-player .art-control-audio-mode-btn,
-body.player-forced-landscape .art-video-player .art-controls-left [data-name="prev-ep-btn"],
-body.player-forced-landscape .art-video-player .art-controls-left [data-name="next-ep-btn"],
-body.player-forced-landscape .art-video-player .art-controls-left [data-name="skip-intro-btn"],
-body.player-forced-landscape .art-video-player .art-controls-right [data-name="audio-mode-btn"] {
-  display: inline-flex !important;
-  align-items: center !important;
-  justify-content: center !important;
 }
 
 /* Ensure controls bar and setting popup do not flicker or glitch on hover */

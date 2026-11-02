@@ -61,7 +61,21 @@ document.addEventListener('DOMContentLoaded', () => {
       s === 'unknown anime' ||
       s === 'undefined' ||
       s === 'null' ||
-      s.startsWith('anime #')
+      s === '[object object]' ||
+      s.startsWith('anime #') ||
+      s.startsWith('episode ')
+    );
+  }
+
+  function isGenericPoster(p) {
+    if (!p || typeof p !== 'string') return true;
+    const s = p.trim().toLowerCase();
+    return (
+      s.length < 5 ||
+      s === 'undefined' ||
+      s === 'null' ||
+      s === '/assets/hero_bg.jpg' ||
+      s.endsWith('/hero_bg.jpg')
     );
   }
 
@@ -203,6 +217,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const qualityDropdownMenu = document.getElementById('quality-dropdown-menu');
   const currentEpTitle = document.getElementById('current-ep-title');
   const currentAnimeTitleSub = document.getElementById('current-anime-title-sub');
+  const btnPlayPauseDown = document.getElementById('btn-play-pause-down');
+  const btnSkipBackward5 = document.getElementById('btn-skip-backward-5');
+  const btnSkipForward5 = document.getElementById('btn-skip-forward-5');
   const btnSkipIntro = document.getElementById('btn-skip-intro');
   const btnPrevEp = document.getElementById('btn-prev-ep');
   const btnNextEp = document.getElementById('btn-next-ep');
@@ -365,6 +382,22 @@ document.addEventListener('DOMContentLoaded', () => {
   // ============================================================================
 
   async function initAuth() {
+    // Proactively purge any corrupt ghost entries from local history
+    try {
+      let localHist = JSON.parse(localStorage.getItem('omcli_local_history') || '[]');
+      if (Array.isArray(localHist) && localHist.length > 0) {
+        const cleaned = localHist.filter(h => {
+          const title = h.anime_title || h.title || '';
+          const poster = h.poster || h.poster_image || '';
+          const aid = String(h.anime_id || h.animeId || '');
+          return !isGenericTitle(title) && !isGenericPoster(poster) && aid && aid !== 'undefined' && aid !== 'null';
+        });
+        if (cleaned.length !== localHist.length) {
+          localStorage.setItem('omcli_local_history', JSON.stringify(cleaned));
+        }
+      }
+    } catch (_) {}
+
     // Apply immediate local preference to all UI buttons & settings inputs
     updateAudioButtons(state.currentMode);
     if (prefAudio) prefAudio.value = state.currentMode;
@@ -1206,8 +1239,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const animeTitle = String(entry.animeTitle || entry.title || 'Anime');
       const poster = String(entry.poster || entry.poster_image || '');
       
-      // STRICT GATE: Never store ghost entries locally (generic title with missing poster)
-      if (isGenericTitle(animeTitle) && (!poster || poster === '/assets/hero_bg.jpg')) {
+      // STRICT GATE: Never store ghost entries locally (generic title OR invalid poster)
+      if (isGenericTitle(animeTitle) || isGenericPoster(poster)) {
         return;
       }
 
@@ -1289,8 +1322,8 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
     const poster = state.currentAnime.coverImage?.extraLarge || state.currentAnime.coverImage?.large || state.currentAnime.bannerImage || '';
-    if (isGenericTitle(animeTitle) && (!poster || poster === '/assets/hero_bg.jpg')) {
-      return; // Do not record ghost progress for unknown/generic media with no poster
+    if (isGenericTitle(animeTitle) || isGenericPoster(poster)) {
+      return; // Do not record ghost progress for unknown/generic media
     }
     const episodeNum = currentEp.number || state.currentEpisodeIndex + 1;
     const episodeId = currentEp.id || '';
@@ -1379,7 +1412,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const title = String(item.anime_title || item.title || '');
       const poster = String(item.poster || item.poster_image || '');
-      const isGhost = isGenericTitle(title) && (!poster || poster === '/assets/hero_bg.jpg');
+      const isGhost = isGenericTitle(title) || isGenericPoster(poster);
 
       if (isGhost) {
         ghostIdsToPurge.push(aid);
@@ -2363,8 +2396,43 @@ document.addEventListener('DOMContentLoaded', () => {
   btnNextEp.addEventListener('click', playNextEpisode);
   btnPrevEp.addEventListener('click', playPrevEpisode);
 
+  if (btnPlayPauseDown) {
+    btnPlayPauseDown.addEventListener('click', () => {
+      if (state.player && typeof state.player.togglePlay === 'function') {
+        state.player.togglePlay();
+      } else if (state.player && state.player.art) {
+        state.player.art.toggle();
+      }
+    });
+  }
+
+  if (btnSkipBackward5) {
+    btnSkipBackward5.addEventListener('click', () => {
+      if (state.player && typeof state.player.seekRelative === 'function') {
+        state.player.seekRelative(-5);
+        if (state.player.showQuickSeekFeedback) state.player.showQuickSeekFeedback('left', '-5s');
+      } else if (state.player && state.player.art) {
+        state.player.art.currentTime = Math.max(0, state.player.art.currentTime - 5);
+      }
+    });
+  }
+
+  if (btnSkipForward5) {
+    btnSkipForward5.addEventListener('click', () => {
+      if (state.player && typeof state.player.seekRelative === 'function') {
+        state.player.seekRelative(5);
+        if (state.player.showQuickSeekFeedback) state.player.showQuickSeekFeedback('right', '+5s');
+      } else if (state.player && state.player.art) {
+        state.player.art.currentTime = Math.min(state.player.art.duration || Infinity, state.player.art.currentTime + 5);
+      }
+    });
+  }
+
   btnSkipIntro.addEventListener('click', () => {
-    if (state.player && state.player.art) {
+    if (state.player && typeof state.player.seekRelative === 'function') {
+      state.player.seekRelative(85);
+      showToast('Skipped intro (+85s)', 'info');
+    } else if (state.player && state.player.art) {
       state.player.art.currentTime = Math.min(state.player.art.duration, state.player.art.currentTime + 85);
       showToast('Skipped intro (+85s)', 'info');
     }
@@ -2492,7 +2560,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const animeTitle = state.currentAnime.title?.english || state.currentAnime.title?.romaji || state.currentAnime.title?.userPreferred || 'Anime';
     const poster = state.currentAnime.coverImage?.extraLarge || state.currentAnime.coverImage?.large || state.currentAnime.bannerImage || '';
-    if (isGenericTitle(animeTitle) && (!poster || poster === '/assets/hero_bg.jpg')) return;
+    if (isGenericTitle(animeTitle) || isGenericPoster(poster)) return;
 
     const episodeNum = currentEp.number || state.currentEpisodeIndex + 1;
     const episodeId = currentEp.id || '';
@@ -2727,7 +2795,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const cleanHistory = json.data.filter(item => {
           const title = String(item.anime_title || '');
           const poster = String(item.poster || '');
-          return !(isGenericTitle(title) && (!poster || poster === '/assets/hero_bg.jpg'));
+          return !(isGenericTitle(title) || isGenericPoster(poster));
         });
 
         if (cleanHistory.length > 0) {
