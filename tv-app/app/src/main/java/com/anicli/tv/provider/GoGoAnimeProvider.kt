@@ -138,8 +138,8 @@ class GoGoAnimeProvider @Inject constructor(
 
     override suspend fun getStreamSources(episodeId: String, mode: String): Result<List<StreamSource>> {
         val parts = episodeId.split("|")
-        if (parts.size == 2 && mode == "dub" && !parts[0].endsWith("-dub")) {
-            val dubEpId = "${parts[0]}-dub|${parts[1]}"
+        if (parts.size >= 2 && mode == "dub" && !parts[0].endsWith("-dub")) {
+            val dubEpId = "${parts[0]}-dub|${parts.last()}"
             val dubRes = resolveStreamSources(dubEpId)
             if (dubRes.isSuccess && dubRes.getOrNull()?.isNotEmpty() == true) {
                 return dubRes
@@ -152,9 +152,9 @@ class GoGoAnimeProvider @Inject constructor(
         return try {
             // episodeId format: "slug|episode_number" e.g. "one-piece-10040|1"
             val parts = episodeId.split("|")
-            if (parts.size != 2) throw Exception("Invalid GoGoAnime episodeId: $episodeId")
+            if (parts.size < 2) throw Exception("Invalid GoGoAnime episodeId: $episodeId")
             val slug = parts[0]
-            val epNum = parts[1]
+            val epNum = parts.last()
 
             // GoGoAnime episode page URL
             val episodePageUrl = "${baseUrl()}/$slug-episode-$epNum"

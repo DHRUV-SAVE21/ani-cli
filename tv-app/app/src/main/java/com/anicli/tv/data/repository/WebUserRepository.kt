@@ -393,6 +393,11 @@ class WebUserRepository @Inject constructor(
             rawTitle
         }
 
+        // Strictly disallow saving ghost records (generic title AND no poster)
+        if (safeTitle.startsWith("Anime #") && poster.isBlank()) {
+            return@withContext
+        }
+
         val entity = WatchProgressEntity(
             mediaId = animeId,
             episodeId = episodeId.takeIf { it.isNotBlank() } ?: "$animeId|${epNum.toInt()}",

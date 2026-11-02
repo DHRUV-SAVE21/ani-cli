@@ -226,9 +226,9 @@ class RealMediaProvider @Inject constructor(
     override suspend fun getStreamSources(episodeId: String, mode: String): Result<List<StreamSource>> {
         return try {
             val parts = episodeId.split("|")
-            if (parts.size != 2) throw Exception("Invalid Episode ID format")
+            if (parts.size < 2) throw Exception("Invalid Episode ID format")
             val mediaId = parts[0]
-            val epNumber = parts[1]
+            val epNumber = parts.last()
             
             val dynamicKey = getDynamicKey()
             

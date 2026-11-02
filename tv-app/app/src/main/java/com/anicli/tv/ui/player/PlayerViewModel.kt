@@ -10,6 +10,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import okhttp3.OkHttpClient
@@ -57,15 +58,47 @@ class PlayerViewModel @Inject constructor(
     private val _cachedAnimeTitle = MutableStateFlow<String>("")
     val cachedAnimeTitle: StateFlow<String> = _cachedAnimeTitle.asStateFlow()
 
+    private val _savedPlaybackPositionMs = MutableStateFlow<Long>(0L)
+    val savedPlaybackPositionMs: StateFlow<Long> = _savedPlaybackPositionMs.asStateFlow()
+
     fun loadStreamSources(episodeId: String, mode: String? = null) {
         currentEpisodeId = episodeId
         _uiState.value = PlayerUiState.Loading
+        _savedPlaybackPositionMs.value = 0L
         // Always respect universal language setting unless explicitly requested
         val activeMode = mode ?: sharedPreferences.getString("pref_language", "dub") ?: "dub"
         _audioMode.value = activeMode
 
         val parts = episodeId.split("|")
         val mediaId = parts.getOrNull(0) ?: ""
+        val epNum = if (parts.size >= 3) {
+            parts.lastOrNull()?.toIntOrNull() ?: 1
+        } else {
+            parts.getOrNull(1)?.toIntOrNull() ?: 1
+        }
+
+        // Query saved progress to resume playback at exact millisecond
+        if (mediaId.isNotBlank()) {
+            viewModelScope.launch {
+                try {
+                    val progress = watchProgressDao.getProgressForMedia(mediaId)
+                        ?: watchProgressDao.getAllProgress().firstOrNull()?.find {
+                            it.mediaId == mediaId || it.mediaId.contains(mediaId) || mediaId.contains(it.mediaId)
+                        }
+                    if (progress != null && progress.progressMs > 3000L) {
+                        val savedEpNum = progress.episodeId.split("|").lastOrNull()?.toIntOrNull()
+                        val isSameEpisode = progress.episodeId == episodeId ||
+                            progress.episodeId.contains(episodeId) ||
+                            episodeId.contains(progress.episodeId) ||
+                            (savedEpNum != null && savedEpNum == epNum)
+                        if (isSameEpisode) {
+                            val isNearEnd = progress.totalDurationMs > 0L && progress.progressMs >= (progress.totalDurationMs - 15000L)
+                            _savedPlaybackPositionMs.value = if (!isNearEnd) progress.progressMs else 0L
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+        }
 
         // Check in-memory cache for immediate 0ms title and episode queue population
         if (mediaId.isNotBlank()) {
@@ -139,7 +172,7 @@ class PlayerViewModel @Inject constructor(
         val parts = currentEpId.split("|")
         val mediaId = parts.getOrNull(0) ?: ""
         val epNum = if (parts.size >= 3) {
-            parts[2].toIntOrNull() ?: 1
+            parts.lastOrNull()?.toIntOrNull() ?: 1
         } else {
             parts.getOrNull(1)?.toIntOrNull() ?: 1
         }
@@ -185,26 +218,35 @@ class PlayerViewModel @Inject constructor(
         lastSavedPositionMs = currentPosition
         viewModelScope.launch {
             try {
-                var title = _cachedAnimeTitle.value.takeIf { it.isNotBlank() && it != "Anime Stream" && it != "Anime" }
-                    ?: mediaDetailCache[mediaId]?.title?.takeIf { it.isNotBlank() && it != "Anime Stream" && it != "Anime" }
+                // Resolve true mediaId if mediaId was accidentally passed as an episode ID
+                val resolvedMediaId = if (mediaDetailCache.containsKey(mediaId)) {
+                    mediaId
+                } else {
+                    mediaDetailCache.entries.find { entry ->
+                        entry.value.episodes.any { it.id == mediaId || it.id == currentEpisodeId }
+                    }?.key ?: _cachedMediaDetail.value?.id ?: mediaId
+                }
+
+                var title = _cachedAnimeTitle.value.takeIf { it.isNotBlank() && it != "Anime Stream" && it != "Anime" && it != "Anime Details" && it != "Continue Watching" }
+                    ?: mediaDetailCache[resolvedMediaId]?.title?.takeIf { it.isNotBlank() && it != "Anime Stream" && it != "Anime" && it != "Anime Details" && it != "Continue Watching" }
                 var poster = _cachedMediaDetail.value?.backdropUrl?.takeIf { it.isNotBlank() }
                     ?: _cachedMediaDetail.value?.posterUrl?.takeIf { it.isNotBlank() }
-                    ?: mediaDetailCache[mediaId]?.backdropUrl?.takeIf { it.isNotBlank() }
-                    ?: mediaDetailCache[mediaId]?.posterUrl?.takeIf { it.isNotBlank() }
+                    ?: mediaDetailCache[resolvedMediaId]?.backdropUrl?.takeIf { it.isNotBlank() }
+                    ?: mediaDetailCache[resolvedMediaId]?.posterUrl?.takeIf { it.isNotBlank() }
 
                 // Fallback to existing saved progress poster/title if available
                 if (title.isNullOrBlank() || poster.isNullOrBlank()) {
-                    val existing = watchProgressDao.getProgressForMedia(mediaId)
-                    if (title.isNullOrBlank()) title = existing?.mediaTitle?.takeIf { it.isNotBlank() && it != "Anime Stream" && it != "Anime" }
+                    val existing = watchProgressDao.getProgressForMedia(resolvedMediaId)
+                    if (title.isNullOrBlank()) title = existing?.mediaTitle?.takeIf { it.isNotBlank() && it != "Anime Stream" && it != "Anime" && it != "Anime Details" }
                     if (poster.isNullOrBlank()) poster = existing?.posterUrl?.takeIf { it.isNotBlank() }
                 }
 
                 // If still missing, query provider for real details
                 if (title.isNullOrBlank() || poster.isNullOrBlank()) {
                     try {
-                        val detailResult = providerSelector.getActiveProvider().getDetails(mediaId)
+                        val detailResult = providerSelector.getActiveProvider().getDetails(resolvedMediaId)
                         detailResult.onSuccess { detail ->
-                            mediaDetailCache[mediaId] = detail
+                            mediaDetailCache[resolvedMediaId] = detail
                             _cachedMediaDetail.value = detail
                             _cachedEpisodes.value = detail.episodes
                             _cachedAnimeTitle.value = detail.title
@@ -215,16 +257,21 @@ class PlayerViewModel @Inject constructor(
                 }
 
                 // If title is STILL blank or placeholder, DO NOT save corrupt dummy records to SQLite
-                if (title.isNullOrBlank() || title == "Anime Stream") {
+                if (title.isNullOrBlank() || title == "Anime Stream" || title.equals("Anime", true) || title.equals("Anime Details", true) || title.equals("Continue Watching", true)) {
                     return@launch
                 }
 
                 val finalTitle = title!!
                 val finalPoster = poster?.takeIf { it.isNotBlank() } ?: ""
 
-                val epId = currentEpisodeId.ifBlank { "$mediaId|$epNum" }
+                // Never save if poster is completely blank for an unverified title
+                if (finalPoster.isBlank() && finalTitle.startsWith("Anime #")) {
+                    return@launch
+                }
+
+                val epId = currentEpisodeId.ifBlank { "$resolvedMediaId|$epNum" }
                 webUserRepository.saveHistory(
-                    animeId = mediaId,
+                    animeId = resolvedMediaId,
                     title = finalTitle,
                     poster = finalPoster,
                     epNum = epNum.toFloat(),

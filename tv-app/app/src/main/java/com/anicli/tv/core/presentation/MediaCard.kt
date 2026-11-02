@@ -468,7 +468,7 @@ fun ContinueWatchingCard(
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Text(
-                            text = "▶ Resume Playback",
+                            text = "▶ View Details & Resume",
                             style = MaterialTheme.typography.labelSmall,
                             color = KuroNamiColors.Cyan,
                             fontWeight = FontWeight.Bold
@@ -482,7 +482,7 @@ fun ContinueWatchingCard(
                 } else {
                     val percent = ((item.progressPercent ?: 0.5f) * 100).toInt().coerceIn(1, 99)
                     Text(
-                        text = "$percent% complete • Press OK to resume",
+                        text = "$percent% complete • Press OK to view & resume",
                         style = MaterialTheme.typography.labelSmall,
                         color = KuroNamiColors.OnSurfaceVariant,
                         maxLines = 1,

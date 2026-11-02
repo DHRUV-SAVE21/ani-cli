@@ -57,12 +57,20 @@ class DetailsViewModel @Inject constructor(
                 }
             }
 
-            // Check existing watch progress
-            try {
-                val progress = watchProgressDao.getProgressForMedia(mediaId)
-                _state.update { it.copy(watchProgress = progress) }
-            } catch (e: Exception) {
-                e.printStackTrace()
+            // Continuously observe watch progress for this media (supports ID or slug matches)
+            launch {
+                try {
+                    watchProgressDao.getAllProgress().collect { allList ->
+                        val found = allList.find { 
+                            it.mediaId == mediaId || 
+                            it.mediaId.contains(mediaId) || 
+                            mediaId.contains(it.mediaId) 
+                        }
+                        _state.update { it.copy(watchProgress = found) }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
 
             // Use the currently active provider

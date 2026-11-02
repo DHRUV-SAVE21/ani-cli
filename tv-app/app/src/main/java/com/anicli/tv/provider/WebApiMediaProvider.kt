@@ -178,13 +178,15 @@ class WebApiMediaProvider @Inject constructor(
 
             if (episodeId.contains("|")) {
                 val parts = episodeId.split("|")
-                mediaId = parts.getOrNull(0) ?: ""
-                if (parts.size >= 3) {
-                    realStreamEpId = parts[1]
-                    targetEpNum = parts[2].toIntOrNull() ?: 1
-                } else if (parts.size == 2) {
+                mediaId = parts.firstOrNull() ?: ""
+                targetEpNum = parts.lastOrNull()?.toIntOrNull() ?: 1
+                if (parts.size == 2) {
                     targetEpNum = parts[1].toIntOrNull() ?: 1
                     realStreamEpId = "" // parts[1] is an episode number, NOT a stream ID!
+                } else {
+                    realStreamEpId = parts.find { p ->
+                        p != mediaId && p.isNotBlank() && (!p.all { it.isDigit() } || (p.toIntOrNull() ?: 0) > 100)
+                    } ?: parts[1]
                 }
             }
 

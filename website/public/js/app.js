@@ -1202,8 +1202,15 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!entry || !entry.animeId) return;
     try {
       const animeId = String(entry.animeId);
+      if (!animeId || animeId === 'undefined' || animeId === 'null' || animeId.includes('|')) return;
       const animeTitle = String(entry.animeTitle || entry.title || 'Anime');
       const poster = String(entry.poster || entry.poster_image || '');
+      
+      // STRICT GATE: Never store ghost entries locally (generic title with missing poster)
+      if (isGenericTitle(animeTitle) && (!poster || poster === '/assets/hero_bg.jpg')) {
+        return;
+      }
+
       const episodeNum = parseInt(entry.episodeNum || entry.episode_num) || 1;
       const episodeId = String(entry.episodeId || entry.episode_id || '');
       const progressSeconds = Math.round(Number(entry.progressSeconds ?? entry.progress_seconds) || 0);
@@ -1282,6 +1289,9 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
     const poster = state.currentAnime.coverImage?.extraLarge || state.currentAnime.coverImage?.large || state.currentAnime.bannerImage || '';
+    if (isGenericTitle(animeTitle) && (!poster || poster === '/assets/hero_bg.jpg')) {
+      return; // Do not record ghost progress for unknown/generic media with no poster
+    }
     const episodeNum = currentEp.number || state.currentEpisodeIndex + 1;
     const episodeId = currentEp.id || '';
     const progressSeconds = Math.round(currentTime || 0);
@@ -1359,15 +1369,52 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (currentReqId !== continueWatchingRequestId) return;
 
-    // Deduplicate by anime_id (keep most recent) and filter invalid
+    // Deduplicate by anime_id (keep most recent) and filter invalid / ghost records
     const seen = new Set();
     const deduplicated = [];
+    const ghostIdsToPurge = [];
     for (const item of history) {
       const aid = String(item.anime_id || item.animeId || '');
-      if (!aid || aid === 'undefined' || aid === 'null' || aid.includes('|') || seen.has(aid)) continue;
+      if (!aid || aid === 'undefined' || aid === 'null' || aid.includes('|')) continue;
+
+      const title = String(item.anime_title || item.title || '');
+      const poster = String(item.poster || item.poster_image || '');
+      const isGhost = isGenericTitle(title) && (!poster || poster === '/assets/hero_bg.jpg');
+
+      if (isGhost) {
+        ghostIdsToPurge.push(aid);
+        continue;
+      }
+
+      if (seen.has(aid)) continue;
       seen.add(aid);
       deduplicated.push(item);
     }
+
+    // Auto-purge any ghosts locally & on server
+    if (ghostIdsToPurge.length > 0) {
+      try {
+        let localHist = JSON.parse(localStorage.getItem('omcli_local_history') || '[]');
+        if (Array.isArray(localHist)) {
+          localHist = localHist.filter(h => !ghostIdsToPurge.includes(String(h.anime_id)));
+          localStorage.setItem('omcli_local_history', JSON.stringify(localHist));
+        }
+        for (const gid of ghostIdsToPurge) {
+          localStorage.removeItem(`ani_progress_${gid}`);
+        }
+      } catch (_) {}
+
+      if (state.auth && state.auth.token) {
+        for (const gid of ghostIdsToPurge) {
+          fetch(`/api/user/history/${gid}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${state.auth.token}` }
+          }).catch(() => {});
+        }
+      }
+    }
+
+    state.userHistory = deduplicated;
 
     const countBadge = document.getElementById('continue-count-badge');
     if (deduplicated.length > 0) {
@@ -2441,8 +2488,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const episodes = state.currentAnime.episodes || [];
     const currentEp = episodes[state.currentEpisodeIndex] || {};
     const animeId = String(state.currentAnime.id);
-    const animeTitle = state.currentAnime.title?.english || state.currentAnime.title?.romaji || 'Anime';
+    if (!animeId || animeId === 'undefined' || animeId === 'null' || animeId.includes('|')) return;
+
+    const animeTitle = state.currentAnime.title?.english || state.currentAnime.title?.romaji || state.currentAnime.title?.userPreferred || 'Anime';
     const poster = state.currentAnime.coverImage?.extraLarge || state.currentAnime.coverImage?.large || state.currentAnime.bannerImage || '';
+    if (isGenericTitle(animeTitle) && (!poster || poster === '/assets/hero_bg.jpg')) return;
+
     const episodeNum = currentEp.number || state.currentEpisodeIndex + 1;
     const episodeId = currentEp.id || '';
 
@@ -2672,44 +2723,54 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       const json = await res.json();
 
-      if (json.success && Array.isArray(json.data) && json.data.length > 0) {
-        accountHistoryList.innerHTML = json.data.map(item => {
-          const progressPercent = item.duration_seconds > 0 
-            ? Math.min(100, Math.round((item.progress_seconds / item.duration_seconds) * 100))
-            : 50;
-          const dateStr = new Date(item.updated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      if (json.success && Array.isArray(json.data)) {
+        const cleanHistory = json.data.filter(item => {
+          const title = String(item.anime_title || '');
+          const poster = String(item.poster || '');
+          return !(isGenericTitle(title) && (!poster || poster === '/assets/hero_bg.jpg'));
+        });
 
-          return `
-            <div class="p-3.5 rounded-2xl bg-surface-container-low border border-white/[0.08] hover:border-primary/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 transition-all cursor-pointer group" onclick="window.location.hash='watch?anime=${item.anime_id}&ep=${item.episode_num}'">
-              <div class="flex items-center gap-3.5 min-w-0">
-                <img src="${item.poster || 'https://via.placeholder.com/60x80'}" alt="${item.anime_title}" class="w-12 h-16 object-cover rounded-xl border border-white/[0.08] flex-shrink-0">
-                <div class="flex flex-col min-w-0">
-                  <h3 class="text-sm font-bold text-white group-hover:text-primary transition-colors truncate">${item.anime_title}</h3>
-                  <div class="flex items-center gap-2 font-mono text-xs text-gray-400 mt-0.5">
-                    <span class="text-secondary font-bold">Episode ${item.episode_num}</span>
-                    <span>•</span>
-                    <span>${progressPercent}% Watched</span>
-                    <span>•</span>
-                    <span class="text-[10px] text-gray-500">${dateStr}</span>
-                  </div>
-                  <!-- Progress bar -->
-                  <div class="w-48 bg-surface-container-high h-1 rounded-full overflow-hidden mt-1.5">
-                    <div class="bg-primary-container h-full rounded-full" style="width: ${progressPercent}%;"></div>
+        if (cleanHistory.length > 0) {
+          accountHistoryList.innerHTML = cleanHistory.map(item => {
+            const progressPercent = item.duration_seconds > 0 
+              ? Math.min(100, Math.round((item.progress_seconds / item.duration_seconds) * 100))
+              : 50;
+            const dateStr = new Date(item.updated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+            return `
+              <div class="p-3.5 rounded-2xl bg-surface-container-low border border-white/[0.08] hover:border-primary/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 transition-all cursor-pointer group" onclick="window.location.hash='watch?anime=${item.anime_id}&ep=${item.episode_num}'">
+                <div class="flex items-center gap-3.5 min-w-0">
+                  <img src="${item.poster || 'https://via.placeholder.com/60x80'}" alt="${item.anime_title}" class="w-12 h-16 object-cover rounded-xl border border-white/[0.08] flex-shrink-0">
+                  <div class="flex flex-col min-w-0">
+                    <h3 class="text-sm font-bold text-white group-hover:text-primary transition-colors truncate">${item.anime_title}</h3>
+                    <div class="flex items-center gap-2 font-mono text-xs text-gray-400 mt-0.5">
+                      <span class="text-secondary font-bold">Episode ${item.episode_num}</span>
+                      <span>•</span>
+                      <span>${progressPercent}% Watched</span>
+                      <span>•</span>
+                      <span class="text-[10px] text-gray-500">${dateStr}</span>
+                    </div>
+                    <!-- Progress bar -->
+                    <div class="w-48 bg-surface-container-high h-1 rounded-full overflow-hidden mt-1.5">
+                      <div class="bg-primary-container h-full rounded-full" style="width: ${progressPercent}%;"></div>
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              <div class="flex items-center gap-3 flex-shrink-0 self-end sm:self-center">
-                <button class="px-3.5 py-1.5 rounded-xl bg-primary-container text-white font-mono text-xs font-bold uppercase shadow-md hover:brightness-110 transition-all flex items-center gap-1">
-                  <span class="material-symbols-outlined text-[15px]">play_arrow</span>Resume
-                </button>
-                <button class="p-1.5 rounded-lg text-gray-400 hover:text-red-400 hover:bg-red-500/10 transition-all" title="Remove from history" onclick="event.stopPropagation(); window.removeHistoryItem('${item.anime_id}')">
-                  <span class="material-symbols-outlined text-[16px]">close</span>
-                </button>
+                <div class="flex items-center gap-3 flex-shrink-0 self-end sm:self-center">
+                  <button class="px-3.5 py-1.5 rounded-xl bg-primary-container text-white font-mono text-xs font-bold uppercase shadow-md hover:brightness-110 transition-all flex items-center gap-1">
+                    <span class="material-symbols-outlined text-[15px]">play_arrow</span>Resume
+                  </button>
+                  <button class="p-1.5 rounded-lg text-gray-400 hover:text-red-400 hover:bg-red-500/10 transition-all" title="Remove from history" onclick="event.stopPropagation(); window.removeHistoryItem('${item.anime_id}')">
+                    <span class="material-symbols-outlined text-[16px]">close</span>
+                  </button>
+                </div>
               </div>
-            </div>
-          `;
-        }).join('');
+            `;
+          }).join('');
+        } else {
+          accountHistoryList.innerHTML = '<div class="py-12 text-center text-gray-500 font-mono text-xs">No watch history recorded yet. Start watching anime to build your timeline!</div>';
+        }
       } else {
         accountHistoryList.innerHTML = '<div class="py-12 text-center text-gray-500 font-mono text-xs">No watch history recorded yet. Start watching anime to build your timeline!</div>';
       }

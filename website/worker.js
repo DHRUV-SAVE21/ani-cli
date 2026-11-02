@@ -514,7 +514,25 @@ export default {
       if (pathname === '/api/user/history' && method === 'GET') {
         const user = await getAuthUser(request, db);
         if (!user) return jsonResponse({ success: false, error: 'Unauthorized' }, 401);
-        const { results } = await db.prepare('SELECT * FROM watch_history WHERE user_id = ? ORDER BY updated_at DESC LIMIT 50').bind(user.id).all();
+
+        // Auto-purge any ghost corrupt records (generic title AND no poster)
+        await db.prepare(`
+          DELETE FROM watch_history 
+          WHERE user_id = ? 
+            AND (lower(anime_title) IN ('anime', 'anime details', 'continue watching', 'unknown', 'unknown anime', 'undefined', 'null') OR anime_title IS NULL OR trim(anime_title) = '')
+            AND (poster IS NULL OR poster = '' OR poster = '/assets/hero_bg.jpg')
+        `).bind(user.id).run().catch(() => {});
+
+        const { results } = await db.prepare(`
+          SELECT * FROM watch_history 
+          WHERE user_id = ? 
+            AND NOT (
+              (lower(anime_title) IN ('anime', 'anime details', 'continue watching', 'unknown', 'unknown anime', 'undefined', 'null') OR anime_title IS NULL OR trim(anime_title) = '')
+              AND (poster IS NULL OR poster = '' OR poster = '/assets/hero_bg.jpg')
+            )
+          ORDER BY updated_at DESC LIMIT 50
+        `).bind(user.id).all();
+
         return jsonResponse({ success: true, data: results || [] });
       }
 
@@ -547,6 +565,12 @@ export default {
             }
           } catch (_) {}
         }
+
+        // STRICT GATE: Never save ghost records (generic title AND no poster)
+        if (isGenericTitle(animeTitle) && (!poster || poster === '/assets/hero_bg.jpg')) {
+          return jsonResponse({ success: false, error: 'Cannot save history without valid anime metadata' }, 400);
+        }
+
         if (!animeTitle || isGenericTitle(animeTitle)) {
           animeTitle = 'Anime';
         }

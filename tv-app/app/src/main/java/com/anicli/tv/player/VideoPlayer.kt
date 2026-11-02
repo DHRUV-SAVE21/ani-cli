@@ -112,7 +112,9 @@ fun VideoPlayer(
     var captionsEnabled by remember { mutableStateOf(true) }
 
     val currentOnNextEpisode by rememberUpdatedState(onNextEpisode)
+    val currentInitialPositionMs by rememberUpdatedState(initialPositionMs)
     var hasHandledEnded by remember(videoUrl) { mutableStateOf(false) }
+    var hasPerformedInitialSeek by remember(videoUrl) { mutableStateOf(false) }
 
     val audioManager = remember { context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager }
     var systemVolumePercent by remember {
@@ -238,7 +240,7 @@ fun VideoPlayer(
                     exoPlayer.playWhenReady = false
                     val pos = exoPlayer.currentPosition
                     val dur = exoPlayer.duration.coerceAtLeast(0L)
-                    if (pos > 0 && dur > 0) {
+                    if (pos > 1000L && dur > 5000L && (hasPerformedInitialSeek || currentInitialPositionMs <= 0L)) {
                         onSaveProgress(pos, dur)
                     }
                 }
@@ -329,16 +331,16 @@ fun VideoPlayer(
             val pos = exoPlayer.currentPosition
             val dur = exoPlayer.duration.coerceAtLeast(0L)
             val buf = exoPlayer.bufferedPosition.coerceAtLeast(0L)
-            if (showController) {
-                currentPosition = pos
-                duration = dur
-                bufferedPosition = buf
-            }
+            currentPosition = pos
+            duration = dur
+            bufferedPosition = buf
             if (exoPlayer.isPlaying) {
                 tickCount++
                 if (tickCount >= 8) {
                     tickCount = 0
-                    onSaveProgress(pos, dur)
+                    if (pos > 1000L && dur > 5000L && (hasPerformedInitialSeek || currentInitialPositionMs <= 0L)) {
+                        onSaveProgress(pos, dur)
+                    }
                 }
             } else if (dur > 5000L && pos >= (dur - 800L) && !hasHandledEnded) {
                 hasHandledEnded = true
@@ -350,6 +352,7 @@ fun VideoPlayer(
 
     // Load Stream Source & Subtitles
     LaunchedEffect(videoUrl, headers, subtitles) {
+        hasPerformedInitialSeek = false
         val userAgent = headers["User-Agent"] ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         val dataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
             .setUserAgent(userAgent)
@@ -380,10 +383,18 @@ fun VideoPlayer(
         exoPlayer.setMediaSource(mediaSource)
         if (initialPositionMs > 0L) {
             exoPlayer.seekTo(initialPositionMs)
+            hasPerformedInitialSeek = true
         }
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
         exoPlayer.volume = 1.0f
+    }
+
+    LaunchedEffect(initialPositionMs) {
+        if (initialPositionMs > 0L && !hasPerformedInitialSeek && exoPlayer.playbackState != Player.STATE_IDLE) {
+            hasPerformedInitialSeek = true
+            exoPlayer.seekTo(initialPositionMs)
+        }
     }
 
     DisposableEffect(Unit) {
@@ -391,6 +402,10 @@ fun VideoPlayer(
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_READY) {
                     duration = exoPlayer.duration.coerceAtLeast(0L)
+                    if (currentInitialPositionMs > 0L && !hasPerformedInitialSeek) {
+                        hasPerformedInitialSeek = true
+                        exoPlayer.seekTo(currentInitialPositionMs)
+                    }
                 } else if (playbackState == Player.STATE_ENDED) {
                     if (!hasHandledEnded) {
                         hasHandledEnded = true
@@ -425,8 +440,10 @@ fun VideoPlayer(
         }
         exoPlayer.addListener(listener)
         onDispose {
-            if (currentPosition > 0 && duration > 0) {
-                onSaveProgress(currentPosition, duration)
+            val finalPos = exoPlayer.currentPosition
+            val finalDur = exoPlayer.duration.coerceAtLeast(0L)
+            if (finalPos > 1000L && finalDur > 5000L && (hasPerformedInitialSeek || currentInitialPositionMs <= 0L)) {
+                onSaveProgress(finalPos, finalDur)
             }
             exoPlayer.removeListener(listener)
             exoPlayer.release()

@@ -37,6 +37,7 @@ fun PlayerScreen(
     val audioMode by viewModel.audioMode.collectAsState()
     val episodes by viewModel.cachedEpisodes.collectAsState()
     val animeTitle by viewModel.cachedAnimeTitle.collectAsState()
+    val initialPositionMs by viewModel.savedPlaybackPositionMs.collectAsState()
 
     var showQualitySelector by remember { mutableStateOf(false) }
     var showEpisodeDrawer by remember { mutableStateOf(false) }
@@ -56,11 +57,13 @@ fun PlayerScreen(
     }
 
     val parts = episodeId.split("|")
-    val mediaId = parts.getOrNull(0) ?: ""
+    val mediaId = if (parts.size >= 2) parts[0] else (viewModel.cachedMediaDetail.value?.id ?: "")
     val epNum = if (parts.size >= 3) {
-        parts[2].toIntOrNull() ?: 1
+        parts.lastOrNull()?.toIntOrNull() ?: 1
+    } else if (parts.size == 2) {
+        parts[1].toIntOrNull() ?: 1
     } else {
-        parts.getOrNull(1)?.toIntOrNull() ?: 1
+        1
     }
 
     Box(
@@ -104,6 +107,7 @@ fun PlayerScreen(
                             subtitles = source.subtitles,
                             okHttpClient = viewModel.okHttpClient,
                             audioMode = audioMode,
+                            initialPositionMs = initialPositionMs,
                             isOverlayDialogOpen = showQualitySelector || showEpisodeDrawer,
                             onToggleAudioMode = {
                                 viewModel.toggleAudioMode()
@@ -367,19 +371,6 @@ fun PlayerScreen(
                                                     .then(
                                                         if (shouldRequestInitialFocus) Modifier.focusRequester(episodeDrawerInitialRequester) else Modifier
                                                     )
-                                                    .onKeyEvent { event ->
-                                                        if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN &&
-                                                            (event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER ||
-                                                             event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ENTER ||
-                                                             event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_NUMPAD_ENTER)
-                                                        ) {
-                                                            showEpisodeDrawer = false
-                                                            onNextEpisode(ep.id)
-                                                            true
-                                                        } else {
-                                                            false
-                                                        }
-                                                    }
                                             ) {
                                                 Row(
                                                     modifier = Modifier

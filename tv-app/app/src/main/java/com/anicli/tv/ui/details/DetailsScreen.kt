@@ -190,8 +190,19 @@ fun DetailsScreen(
                             val watchProg = state.watchProgress
 
                             if (watchProg != null && watchProg.episodeId.isNotBlank()) {
+                                // Match watchProg to real episode in detail.episodes
+                                val savedEpNum = watchProg.episodeId.split("|").lastOrNull()?.toIntOrNull()
+                                val matchedEp = detail.episodes.find { ep ->
+                                    ep.id == watchProg.episodeId || (savedEpNum != null && ep.number == savedEpNum)
+                                }
+                                val resumeEpId = matchedEp?.id ?: watchProg.episodeId
+                                val epDisplayNum = matchedEp?.number ?: savedEpNum ?: 1
+                                val percent = if (watchProg.totalDurationMs > 0L) {
+                                    ((watchProg.progressMs.toFloat() / watchProg.totalDurationMs.toFloat()) * 100).toInt().coerceIn(1, 99)
+                                } else null
+
                                 Button(
-                                    onClick = { onPlayClick(watchProg.episodeId) },
+                                    onClick = { onPlayClick(resumeEpId) },
                                     colors = ButtonDefaults.colors(
                                         containerColor = KuroNamiColors.Crimson,
                                         focusedContainerColor = KuroNamiColors.CrimsonContainer
@@ -200,24 +211,34 @@ fun DetailsScreen(
                                 ) {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                                     ) {
                                         Icon(
                                             Icons.Filled.PlayArrow,
                                             contentDescription = null,
                                             tint = Color.White,
-                                            modifier = Modifier.size(20.dp)
+                                            modifier = Modifier.size(22.dp)
                                         )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = "Resume (${watchProg.episodeTitle.ifBlank { "Next" }})",
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color.White
-                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Column {
+                                            Text(
+                                                text = "Resume Episode $epDisplayNum",
+                                                fontWeight = FontWeight.ExtraBold,
+                                                style = MaterialTheme.typography.titleSmall,
+                                                color = Color.White
+                                            )
+                                            if (percent != null) {
+                                                Text(
+                                                    text = "$percent% watched",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = KuroNamiColors.CyanSoft
+                                                )
+                                            }
+                                        }
                                     }
                                 }
 
-                                if (firstEp != null && firstEp.id != watchProg.episodeId) {
+                                if (firstEp != null && firstEp.id != resumeEpId && firstEp.number != epDisplayNum) {
                                     Button(
                                         onClick = { onPlayClick(firstEp.id) },
                                         colors = ButtonDefaults.colors(
@@ -230,13 +251,13 @@ fun DetailsScreen(
                                             text = "Play Episode 1",
                                             fontWeight = FontWeight.Medium,
                                             color = Color.White,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                                         )
                                     }
                                 }
                             } else {
                                 Button(
-                                    onClick = { onPlayClick(firstEp?.id ?: "") },
+                                    onClick = { onPlayClick(firstEp?.id ?: mediaId) },
                                     colors = ButtonDefaults.colors(
                                         containerColor = KuroNamiColors.Crimson,
                                         focusedContainerColor = KuroNamiColors.CrimsonContainer
@@ -245,15 +266,15 @@ fun DetailsScreen(
                                 ) {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                                     ) {
                                         Icon(
                                             Icons.Filled.PlayArrow,
                                             contentDescription = null,
                                             tint = Color.White,
-                                            modifier = Modifier.size(20.dp)
+                                            modifier = Modifier.size(22.dp)
                                         )
-                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
                                         Text(
                                             text = if (firstEp != null) "Play Episode 1" else "Play",
                                             fontWeight = FontWeight.Bold,
@@ -468,18 +489,6 @@ fun EpisodeCard(
             .padding(6.dp)
             .aspectRatio(16f / 10f)
             .onFocusChanged { isFocused = it.isFocused }
-            .onKeyEvent { event ->
-                if (event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN &&
-                    (event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER ||
-                     event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_ENTER ||
-                     event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_NUMPAD_ENTER)
-                ) {
-                    onClick()
-                    true
-                } else {
-                    false
-                }
-            }
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             AsyncImage(

@@ -475,6 +475,11 @@ async function saveWatchHistory(userId, data) {
       }
     } catch (_) {}
   }
+  // STRICT GATE: Never save ghost records (generic title AND no poster)
+  if (isGenericTitle(title) && (!poster || poster === '/assets/hero_bg.jpg')) {
+    return;
+  }
+
   if (!title || isGenericTitle(title)) {
     title = 'Anime';
   }
@@ -534,17 +539,35 @@ async function saveWatchHistory(userId, data) {
 }
 
 async function getWatchHistory(userId, limit = 50) {
-  const sql = `SELECT * FROM watch_history WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?`;
+  const purgeSql = `
+    DELETE FROM watch_history 
+    WHERE user_id = ? 
+      AND (lower(anime_title) IN ('anime', 'anime details', 'continue watching', 'unknown', 'unknown anime', 'undefined', 'null') OR anime_title IS NULL OR trim(anime_title) = '')
+      AND (poster IS NULL OR poster = '' OR poster = '/assets/hero_bg.jpg')
+  `;
+  const sql = `
+    SELECT * FROM watch_history 
+    WHERE user_id = ? 
+      AND NOT (
+        (lower(anime_title) IN ('anime', 'anime details', 'continue watching', 'unknown', 'unknown anime', 'undefined', 'null') OR anime_title IS NULL OR trim(anime_title) = '')
+        AND (poster IS NULL OR poster = '' OR poster = '/assets/hero_bg.jpg')
+      )
+    ORDER BY updated_at DESC LIMIT ?
+  `;
   if (isCloudflareD1Api) {
+    await queryCloudflareD1(purgeSql, [Number(userId)]).catch(() => {});
     const res = await queryCloudflareD1(sql, [Number(userId), limit]);
     return res.results || [];
   }
   if (!useMemoryFallback && localSqliteDb) {
+    try { localSqliteDb.prepare(purgeSql).run(Number(userId)); } catch (_) {}
     return localSqliteDb.prepare(sql).all(Number(userId), limit);
   }
   const userHist = memoryStore.history.get(Number(userId));
   if (!userHist) return [];
-  return Array.from(userHist.values()).sort((a, b) => b.updated_at - a.updated_at).slice(0, limit);
+  return Array.from(userHist.values())
+    .filter(item => !(isGenericTitle(item.anime_title) && (!item.poster || item.poster === '/assets/hero_bg.jpg')))
+    .sort((a, b) => b.updated_at - a.updated_at).slice(0, limit);
 }
 
 async function deleteHistoryItem(userId, animeId) {

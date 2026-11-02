@@ -519,13 +519,7 @@ fun HistoryView(
                 items(items) { item ->
                     ContinueWatchingCard(
                         item = item,
-                        onClick = {
-                            if (!item.episodeId.isNullOrBlank() && onPlayEpisode != null) {
-                                onPlayEpisode(item.episodeId)
-                            } else {
-                                onMediaClick(item.id)
-                            }
-                        },
+                        onClick = { onMediaClick(item.id) },
                         onRemove = if (onRemoveContinueWatching != null) { { onRemoveContinueWatching(item) } } else null,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -1085,13 +1079,7 @@ fun HomeRow(
                 if (isContinueWatching) {
                     ContinueWatchingCard(
                         item = item,
-                        onClick = {
-                            if (!item.episodeId.isNullOrBlank() && onPlayEpisode != null) {
-                                onPlayEpisode(item.episodeId)
-                            } else {
-                                onMediaClick(item.id)
-                            }
-                        },
+                        onClick = { onMediaClick(item.id) },
                         onFocus = { onFocusItem(item) },
                         onRemove = if (onRemoveContinueWatching != null) { { onRemoveContinueWatching(item) } } else null
                     )
